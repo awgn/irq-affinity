@@ -23,56 +23,80 @@
 
 module Main where
 
-import Data.Maybe
+import Data.Maybe ( catMaybes, fromJust )
 import Data.List(nub, sort)
 import Data.List.Split(splitOneOf)
 import Control.Monad.State
-import Control.Exception
-import Text.Regex.Posix
+    ( forM_,
+      void,
+      forM,
+      when,
+      MonadIO(liftIO),
+      evalStateT,
+      MonadState(put, get),
+      MonadTrans(lift),
+      StateT )
+import Control.Exception ( handle, ErrorCall(ErrorCall) )
+import Text.Regex.Posix ( (=~) )
 
 import Numeric(showHex,readHex)
 
-import Text.Printf
-import Data.Bits
-import Data.Data
+import Text.Printf ( printf )
+import Data.Bits ( Bits((.&.), (.|.), shiftL) )
+import Data.Data ( Data, Typeable )
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
 import System.Console.ANSI
+    ( setSGRCode,
+      Color(Green, Red, Blue),
+      ColorIntensity(Vivid),
+      ConsoleIntensity(BoldIntensity),
+      ConsoleLayer(Foreground),
+      SGR(SetColor, SetConsoleIntensity) )
 import System.Console.CmdArgs
-import System.IO.Unsafe
+    ( (&=),
+      cmdArgsMode,
+      cmdArgsRun,
+      args,
+      explicit,
+      help,
+      name,
+      program,
+      summary,
+      typ,
+      Default(def),
+      Mode,
+      CmdArgs )
+import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
-import System.Exit
+import System.Exit ( exitWith, ExitCode(ExitFailure) )
 
 bold, red, blue, green, reset :: T.Text
-
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
 red   = T.pack $ setSGRCode [SetColor Foreground Vivid Red]
 blue  = T.pack $ setSGRCode [SetColor Foreground Vivid Blue]
 green = T.pack $ setSGRCode [SetColor Foreground Vivid Green]
 reset = T.pack $ setSGRCode []
 
-
 putStrBoldLn :: T.Text -> IO ()
 putStrBoldLn msg = T.putStrLn $ bold <> msg <> reset
 
 proc_interrupt, proc_cpuinfo, proc_irq :: String
-
-proc_irq = "/proc/irq/"
+proc_irq       = "/proc/irq/"
 proc_interrupt = "/proc/interrupts"
 proc_cpuinfo   = "/proc/cpuinfo"
 
 
 type Device = String
 
-
 -- Command line options
 --
 
 data Options = Options
-    {   firstcpu    :: Int
+    {   firstCPU    :: Int
     ,   exclude     :: [Int]
-    ,   algorithm   :: Maybe String
+    ,   strategy    :: Maybe String
     ,   oneToMany   :: Bool
     ,   showCPU     :: [Int]
     ,   showAllCPUs :: Bool
@@ -89,18 +113,18 @@ type CpuMask = Integer
 
 options :: Mode (CmdArgs Options)
 options = cmdArgsMode $ Options
-    {   firstcpu    = 0       &= typ "CPU"   &= help "First cpu involved"
-    ,   exclude     = []      &= typ "CPU"   &= help "Exclude cpu from binding"
-    ,   algorithm   = Nothing                &= help "Algorithm: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi"
+    {   firstCPU    = 0       &= typ "CPU"   &= help "First CPU involved in binding."
+    ,   exclude     = []      &= typ "CPU"   &= help "Exclude CPUs from binding."
+    ,   strategy    = Nothing                &= help "Strategy: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi"
     ,   oneToMany   = False   &= explicit    &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one"
     ,   showCPU     = []      &= explicit    &= name "cpu"  &= help "Display IRQs of the given CPUs set"
     ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs avaialables"
     ,   bindIRQ     = def     &= explicit    &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)"
     ,   arguments   = []                     &= args
-    } &= summary "pfq-affinity: Linux Interrupt-Affinity bind tool." &= program "pfq-affinity"
+    } &= summary "irq-affinity: a Linux interrupt affinity binding tool." &= program "irq-affinity"
 
 
--- binding algorithm
+-- binding strategy
 --
 
 data IrqBinding = IrqBinding
@@ -109,7 +133,6 @@ data IrqBinding = IrqBinding
     ,   multi     :: Int
     ,   runFilter :: Int -> Bool
     }
-
 
 makeIrqBinding :: [String] -> Int -> IrqBinding
 makeIrqBinding ["round-robin"]    _      = IrqBinding (-1)      1       1       none
@@ -122,11 +145,10 @@ makeIrqBinding ["any"]            _      = IrqBinding 0         0       0       
 makeIrqBinding ["all-in", n]      _      = IrqBinding (read n)  0       1       none
 makeIrqBinding ["step",   s]      first  = IrqBinding first   (read s)  1       none
 makeIrqBinding ["custom", s, m]   first  = IrqBinding first   (read s) (read m) none
-makeIrqBinding _ _ =  error "pfq-affinity: unknown IRQ binding algorithm"
+makeIrqBinding _ _ =  error "irq-affinity: unknown IRQ binding strategy"
 
-none :: a -> Bool
-none _ = True
-
+none :: b -> Bool
+none = const True
 
 -- main function
 --
@@ -134,15 +156,14 @@ none _ = True
 main :: IO ()
 main = handle (\(ErrorCall msg) -> putStrBoldLn (red <> T.pack msg <> reset) *> exitWith (ExitFailure 1)) $ do
     opt' <- cmdArgsRun options
-    evalStateT (runCmd opt') (opt', firstcpu opt')
-
+    evalStateT (runCmd opt') (opt', firstCPU opt')
 
 -- dispatch commands
 --
 
 runCmd :: Options -> BindStateT IO ()
 runCmd Options{..}
-    | Just _  <- algorithm  = forM_ arguments $ \dev -> bindDevice dev
+    | Just _  <- strategy   = forM_ arguments $ \dev -> applyStrategy dev
     | showAllCPUs           = liftIO $ showAllCpuIRQs (T.pack <$> arguments)
     | not $ null showCPU    = liftIO $ mapM_ (showIRQ (T.pack <$> arguments)) showCPU
     | not $ null bindIRQ    = runBinding bindIRQ (map read arguments)
@@ -150,20 +171,19 @@ runCmd Options{..}
     | otherwise             = liftIO $ withArgs ["--help"] $ void (cmdArgsRun options)
 
 
--- bindDevice
+-- applyStrategy: apply a given strategy to a given device
 --
 
-bindDevice :: String -> BindStateT IO ()
-bindDevice dev = do
-    (op,start) <- get
-    let alg  = makeIrqBinding (splitOneOf ":/" $ fromJust (algorithm op)) (firstcpu op)
+applyStrategy :: String -> BindStateT IO ()
+applyStrategy dev = do
+    (op, start) <- get
+    let alg  = makeIrqBinding (splitOneOf ":/" $ fromJust (strategy op)) (firstCPU op)
         cpus = mkEligibleCPUs dev (exclude op) start alg
     runBinding dev cpus
 
 
 -- show IRQ affinity of a given device
 --
-
 
 showBinding :: String -> BindStateT IO ()
 showBinding dev = do
@@ -173,10 +193,10 @@ showBinding dev = do
     lift $ do
         let cpus = nub . sort . concat $ getIrqAffinity . fst <$> irq
 
-        putStrLn $ "IRQ binding for device " <> dev <> " on cpu "  <> show cpus <> " (" <>  show (length irq) <> " irqs): "
+        putStrLn $ "IRQ binding for device " <> dev <> " on cpu "  <> show cpus <> " (" <>  show (length irq) <> " IRQs): "
 
         when (null irq) $
-            error $ "pfq-affinity: irq vector not found for dev " <> dev <> "!"
+            error $ "irq-affinity: IRQ vector not found for dev " <> dev <> "!"
 
         forM_ irq $ \(n,descr) -> do
             let cs = getIrqAffinity n
@@ -220,7 +240,7 @@ showIRQ filts cpu = do
     forM_ out $ \(n,descr) -> do
         let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
         when (or xs || null filts) $
-            printf "  irq %s%d%s:%s%s%s\n" red n reset green descr reset
+            printf "  IRQ %s%d%s:%s%s%s\n" red n reset green descr reset
 
 -- runBinding
 
@@ -231,9 +251,9 @@ runBinding dev cpus = do
     let irqs = fst <$> getInterruptsByDevice dev
 
     lift $ do
-        putStrLn $ "Setting binding for device " <> dev <>":"
-        when (null irqs) $ error ("pfq-affinity: IRQs not found for the " <> dev <> " device!")
-        when (null cpus) $ error "pfq-affinity: No eligible cpu found!"
+        putStrLn $ "Setting IRQ binding for device " <> dev <>":"
+        when (null irqs) $ error ("irq-affinity: IRQs not found for the " <> dev <> " device!")
+        when (null cpus) $ error "irq-affinity: No eligible CPU found!"
 
         let doBind = if oneToMany op
                         then bindOneToMany
@@ -298,9 +318,7 @@ mkEligibleCPUs dev excl f (IrqBinding f' step multi' filt) =
         where nqueue = getNumberOfQueues dev
 
 
--- the following actions can be unsafe IO because the files they parse are immutable
-
--- get IRQ affinity, that is the list of the CPUs the given irq is bound to
+-- get IRQ affinity, that is the list of the CPUs the given IRQ is bound to
 
 {-# NOINLINE getIrqAffinity #-}
 getIrqAffinity :: Int -> [Int]
@@ -330,4 +348,3 @@ getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file 
 getNumberOfPhyCores :: Int
 getNumberOfPhyCores = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
     return $ length $ filter ("processor" `T.isInfixOf`) $ T.lines file
-
