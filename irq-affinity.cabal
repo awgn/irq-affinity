@@ -35,6 +35,7 @@ common common-options
   default-language:    Haskell2010
 
 executable irq-affinity
+  import:             common-options
   main-is:            irq-affinity.hs
   build-depends:      base >= 4.7,
                       cmdargs,
@@ -46,7 +47,7 @@ executable irq-affinity
   default-language:   Haskell2010
 
   if flag (StaticBuild) {
-    ghc-options:      -O2 -Wall -threaded -funbox-strict-fields -fno-state-hack -rtsopts -static
+    ghc-options:      -O2 -Wall -static -threaded -optl-fuse-ld=bfd 
     cc-options:       -static
     ld-options:       -static -pthread
   }

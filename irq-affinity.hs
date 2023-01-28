@@ -1,4 +1,3 @@
---
 -- Copyright (c) 2015-16 Nicola Bonelli <nicola@pfq.io>
 --
 -- This program is free software; you can redistribute it and/or modify
@@ -17,11 +16,12 @@
 --
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ApplicativeDo #-}
 
-module Main where
+module Main (module Main) where
 
 import Data.Maybe ( catMaybes, fromJust )
 import Data.List(nub, sort)
@@ -102,7 +102,7 @@ data Options = Options
     ,   showCPU     :: [Int]
     ,   bindIRQ     :: Device
     ,   arguments   :: [String]
-    } deriving (Data, Typeable, Show)
+    } deriving stock (Data, Typeable, Show)
 
 
 type BindStateT = StateT (Options, Int)
