@@ -98,8 +98,8 @@ data Options = Options
     ,   exclude     :: [Int]
     ,   strategy    :: Maybe String
     ,   oneToMany   :: Bool
-    ,   showCPU     :: [Int]
     ,   showAllCPUs :: Bool
+    ,   showCPU     :: [Int]
     ,   bindIRQ     :: Device
     ,   arguments   :: [String]
     } deriving (Data, Typeable, Show)
@@ -115,11 +115,11 @@ options :: Mode (CmdArgs Options)
 options = cmdArgsMode $ Options
     {   firstCPU    = 0       &= typ "CPU"   &= help "First CPU involved in binding."
     ,   exclude     = []      &= typ "CPU"   &= help "Exclude CPUs from binding."
-    ,   strategy    = Nothing                &= help "Strategy: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi"
-    ,   oneToMany   = False   &= explicit    &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one"
-    ,   showCPU     = []      &= explicit    &= name "cpu"  &= help "Display IRQs of the given CPUs set"
-    ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs avaialables"
-    ,   bindIRQ     = def     &= explicit    &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)"
+    ,   strategy    = Nothing                &= help "Strategies: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
+    ,   oneToMany   = False   &= explicit    &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
+    ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs avaialables."
+    ,   showCPU     = []      &= explicit    &= name "cpu"  &= help "Display IRQs of the given CPUs set."
+    ,   bindIRQ     = def     &= explicit    &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
     ,   arguments   = []                     &= args
     } &= summary "irq-affinity: a Linux interrupt affinity binding tool." &= program "irq-affinity"
 
