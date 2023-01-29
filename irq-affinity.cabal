@@ -1,8 +1,6 @@
 cabal-version:          2.4
 name:                   irq-affinity
-version:                6.1
--- synopsis:
--- description:
+version:                1.0
 license-file:           LICENSE
 author:                 Nicola Bonelli
 maintainer:             nicola@pfq.io
@@ -47,7 +45,7 @@ executable irq-affinity
   default-language:   Haskell2010
 
   if flag (StaticBuild) {
-    ghc-options:      -O2 -Wall -static -threaded -optl-fuse-ld=bfd 
+    ghc-options:      -O2 -Wall -static -threaded -optl-fuse-ld=bfd
     cc-options:       -static
     ld-options:       -static -pthread
   }

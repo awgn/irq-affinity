@@ -1,4 +1,4 @@
--- Copyright (c) 2015-16 Nicola Bonelli <nicola@pfq.io>
+-- Copyright (c) 2015-2023 Nicola Bonelli <nicola@pfq.io>
 --
 -- This program is free software; you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -20,8 +20,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module Main (module Main) where
+
 
 import Data.Maybe ( catMaybes, fromJust )
 import Data.List(nub, sort)
@@ -34,7 +36,6 @@ import Control.Monad.State
       MonadIO(liftIO),
       evalStateT,
       MonadState(put, get),
-      MonadTrans(lift),
       StateT )
 import Control.Exception ( handle, ErrorCall(ErrorCall) )
 import Text.Regex.Posix ( (=~) )
@@ -71,6 +72,7 @@ import System.Console.CmdArgs
 import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
+import Data.Bifunctor as B (second)
 
 bold, red, blue, green, reset :: T.Text
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
@@ -99,13 +101,14 @@ data Options = Options
     ,   strategy    :: Maybe String
     ,   oneToMany   :: Bool
     ,   showAllCPUs :: Bool
+    ,   dryRun      :: Bool
     ,   showCPU     :: [Int]
     ,   bindIRQ     :: Device
     ,   arguments   :: [String]
     } deriving stock (Data, Typeable, Show)
 
+type BindIO = StateT (Options, Int) IO
 
-type BindStateT = StateT (Options, Int)
 type CpuMask = Integer
 
 -- default options
@@ -117,7 +120,8 @@ options = cmdArgsMode $ Options
     ,   exclude     = []      &= typ "CPU"   &= help "Exclude CPUs from binding."
     ,   strategy    = Nothing                &= help "Strategies: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
     ,   oneToMany   = False   &= explicit    &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
-    ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs avaialables."
+    ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs available."
+    ,   dryRun      = False                  &= help "Dry run, don't actually set affinity."
     ,   showCPU     = []      &= explicit    &= name "cpu"  &= help "Display IRQs of the given CPUs set."
     ,   bindIRQ     = def     &= explicit    &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
     ,   arguments   = []                     &= args
@@ -161,47 +165,83 @@ main = handle (\(ErrorCall msg) -> putStrBoldLn (red <> T.pack msg <> reset) *> 
 -- dispatch commands
 --
 
-runCmd :: Options -> BindStateT IO ()
+runCmd :: Options -> BindIO ()
 runCmd Options{..}
     | Just _  <- strategy   = forM_ arguments $ \dev -> applyStrategy dev
     | showAllCPUs           = liftIO $ showAllCpuIRQs (T.pack <$> arguments)
     | not $ null showCPU    = liftIO $ mapM_ (showIRQ (T.pack <$> arguments)) showCPU
     | not $ null bindIRQ    = runBinding bindIRQ (map read arguments)
-    | not $ null arguments  = mapM_ showBinding arguments
+    | not $ null arguments  = liftIO $ mapM_ showBinding arguments
     | otherwise             = liftIO $ withArgs ["--help"] $ void (cmdArgsRun options)
 
 
 -- applyStrategy: apply a given strategy to a given device
 --
 
-applyStrategy :: String -> BindStateT IO ()
+applyStrategy :: String -> BindIO ()
 applyStrategy dev = do
     (op, start) <- get
     let alg  = makeIrqBinding (splitOneOf ":/" $ fromJust (strategy op)) (firstCPU op)
         cpus = mkEligibleCPUs dev (exclude op) start alg
     runBinding dev cpus
 
+-- runBinding
+
+runBinding :: String -> [Int] -> BindIO ()
+runBinding dev cpus = do
+    (op@Options{..}, _) <- get
+
+    let irqs = fst <$> getInterruptsByDevice dev
+
+    if | null irqs -> error ("irq-affinity: IRQs not found for the " <> dev <> " device!")
+       | null cpus -> error "irq-affinity: No eligible CPU found!"
+       | otherwise -> liftIO $ putStr ("Setting IRQ binding for device " <> dev <>":") *> putStrLn (if dryRun then "  (dry run)" else "")
+
+    let doBind = if oneToMany
+                    then bindOneToMany
+                    else bindOneToOne
+    doBind irqs cpus
+    put (op, last cpus + 1)
+
+
+{-# INLINE bindOneToOne #-}
+bindOneToOne :: [Int] -> [Int] -> BindIO ()
+bindOneToOne irqs cpus = forM_ (zip irqs cpus) $ \(irq,cpu) -> setIrqAffinity irq [cpu]
+
+{-# INLINE bindOneToMany #-}
+bindOneToMany :: [Int] -> [Int] -> BindIO ()
+bindOneToMany irqs cpus = forM_ irqs $ \irq -> setIrqAffinity irq cpus
+
+-- set IRQ affinity for the given (irq,cpu) pair
+
+setIrqAffinity :: Int -> [Int] -> BindIO ()
+setIrqAffinity irq cpus = do
+    (Options{..}, _ ) <- get
+    liftIO $ do
+        putStr $ "  irq " <> show irq <> " -> CPU " <> show cpus <> " {mask = " <> mask' <> "} "
+        if dryRun
+            then putStrLn $ "[ " <> proc_irq <> show irq <> "/smp_affinity" <> " <- " <> mask' <> " ]"
+            else putChar '\n' *> writeFile (proc_irq <> show irq <> "/smp_affinity") mask'
+
+      where mask' = showMask $ makeCpuMask cpus
+
 
 -- show IRQ affinity of a given device
 --
 
-showBinding :: String -> BindStateT IO ()
+showBinding :: String -> IO ()
 showBinding dev = do
-    -- (op,_) <- get
     let irq = getInterruptsByDevice dev
+    let cpus = (nub . sort) (concatMap (getIrqAffinity . fst) irq)
 
-    lift $ do
-        let cpus = nub . sort . concat $ getIrqAffinity . fst <$> irq
+    putStrLn $ "IRQ binding for device " <> dev <> " on cpu "  <> show cpus <> " (" <>  show (length irq) <> " IRQs): "
 
-        putStrLn $ "IRQ binding for device " <> dev <> " on cpu "  <> show cpus <> " (" <>  show (length irq) <> " IRQs): "
+    when (null irq) $
+        error $ "irq-affinity: IRQ vector not found for dev " <> dev <> "!"
 
-        when (null irq) $
-            error $ "irq-affinity: IRQ vector not found for dev " <> dev <> "!"
-
-        forM_ irq $ \(n,descr) -> do
-            let cs = getIrqAffinity n
-            printf "  irq %s%d%s:%s%s%s -> cpu %v\n" red  n reset green descr reset (show cs)
-
+    forM_ irq $ \(n,descr) -> do
+        let cs = getIrqAffinity n
+        printf "  irq %s%d%s:%s%s%s -> cpu %v\n" red  n reset green descr reset (show cs)
 
 -- show cpus irq map
 --
@@ -242,43 +282,6 @@ showIRQ filts cpu = do
         when (or xs || null filts) $
             printf "  IRQ %s%d%s:%s%s%s\n" red n reset green descr reset
 
--- runBinding
-
-runBinding :: String -> [Int] -> BindStateT IO ()
-runBinding dev cpus = do
-    (op, _) <- get
-
-    let irqs = fst <$> getInterruptsByDevice dev
-
-    lift $ do
-        putStrLn $ "Setting IRQ binding for device " <> dev <>":"
-        when (null irqs) $ error ("irq-affinity: IRQs not found for the " <> dev <> " device!")
-        when (null cpus) $ error "irq-affinity: No eligible CPU found!"
-
-        let doBind = if oneToMany op
-                        then bindOneToMany
-                        else bindOneToOne
-        doBind irqs cpus
-
-    put (op, last cpus + 1)
-
-
-bindOneToOne :: [Int] -> [Int] -> IO ()
-bindOneToOne irqs cpus = forM_ (zip irqs cpus) $ \(irq,cpu) -> setIrqAffinity irq [cpu]
-
-
-bindOneToMany :: [Int] -> [Int] -> IO ()
-bindOneToMany irqs cpus = forM_ irqs $ \irq -> setIrqAffinity irq cpus
-
-
--- set IRQ affinity for the given (irq,cpu) pair
-
-setIrqAffinity :: Int -> [Int] -> IO ()
-setIrqAffinity irq cpus = do
-    putStrLn $ "  irq " <> show irq <> " -> CPU " <> show cpus <> " {mask = " <> mask' <> "}"
-    writeFile (proc_irq <> show irq <> "/smp_affinity") mask'
-      where mask' = showMask $ makeCpuMask cpus
-
 -- utilities
 --
 
@@ -303,8 +306,7 @@ makeCpuMask = foldr (\cpu mask' -> mask' .|. (1 `shiftL` cpu)) (0 :: CpuMask)
 getCpusListFromMask :: CpuMask -> [Int]
 getCpusListFromMask mask'  = [ n | n <- [0 .. 4095], let p2 = 1 `shiftL` n, mask' .&. p2 /= 0 ]
 
-
--- given a device and a bind-algorithm, create the list of eligible cpu
+-- given a device and a bind-strategy, create the list of eligible cpu
 --
 
 mkEligibleCPUs :: Device -> [Int] -> Int -> IrqBinding -> [Int]
@@ -329,7 +331,7 @@ getIrqAffinity irq =  unsafePerformIO $
 {-# NOINLINE getInterrupts #-}
 getInterrupts :: [(Int, T.Text)]
 getInterrupts = unsafePerformIO $ readFile proc_interrupt >>= \file ->
-    return $ map (\(i,l) -> (i, T.pack . last . words $ l)) (concatMap reads $ lines file :: [(Int, String)])
+    return $ map (B.second (T.pack . last . words)) (concatMap reads $ lines file :: [(Int, String)])
 
 
 {-# NOINLINE getNumberOfQueues #-}
