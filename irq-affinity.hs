@@ -18,6 +18,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE MultiWayIf #-}
@@ -189,15 +190,15 @@ applyStrategy dev = do
 
 runBinding :: String -> [Int] -> BindIO ()
 runBinding dev cpus = do
-    (op@Options{..}, _) <- get
+    (op, _) <- get
 
     let irqs = fst <$> getInterruptsByDevice dev
 
     if | null irqs -> error ("irq-affinity: IRQs not found for the " <> dev <> " device!")
        | null cpus -> error "irq-affinity: No eligible CPU found!"
-       | otherwise -> liftIO $ putStr ("Setting IRQ binding for device " <> dev <>":") *> putStrLn (if dryRun then "  (dry run)" else "")
+       | otherwise -> liftIO $ putStr ("Setting IRQ binding for device " <> dev <>":") *> putStrLn (if op.dryRun then "  (dry run)" else "")
 
-    let doBind = if oneToMany
+    let doBind = if op.oneToMany
                     then bindOneToMany
                     else bindOneToOne
     doBind irqs cpus
@@ -216,10 +217,10 @@ bindOneToMany irqs cpus = forM_ irqs $ \irq -> setIrqAffinity irq cpus
 
 setIrqAffinity :: Int -> [Int] -> BindIO ()
 setIrqAffinity irq cpus = do
-    (Options{..}, _ ) <- get
+    (op, _ ) <- get
     liftIO $ do
         putStr $ "  irq " <> show irq <> " -> CPU " <> show cpus <> " {mask = " <> mask' <> "} "
-        if dryRun
+        if op.dryRun
             then putStrLn $ "[ " <> proc_irq <> show irq <> "/smp_affinity" <> " <- " <> mask' <> " ]"
             else putChar '\n' *> writeFile (proc_irq <> show irq <> "/smp_affinity") mask'
 
