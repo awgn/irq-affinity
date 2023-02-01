@@ -74,7 +74,7 @@ import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
 import Data.Bifunctor as B (second)
-import Data.Tuple.Extra
+import Data.Tuple.Extra ( fst3 )
 
 bold, red, blue, green, reset :: T.Text
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
@@ -272,17 +272,18 @@ showIRQ filts cpu = do
     let irqs = getInterrupts
     putStrLn $ "CPU " <> show cpu <> ":"
 
-    mat <- forM irqs $ \n -> do
+    mat <- catMaybes <$> forM irqs (\n -> do
         let cs = getIrqAffinity (fst n)
         if cpu `elem` cs
             then return $ Just (n, cs)
-            else return Nothing
+            else return Nothing)
 
-    let out = map fst $ catMaybes mat
+    let out = fst <$> mat
     forM_ out $ \(n,descr) -> do
         let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
-        when (or xs || null filts) $
-            printf "  IRQ %s%d%s:%s%s%s\n" red n reset green descr reset
+        when (or xs || null filts) $ do
+            let cntrs = getIRQCounters n
+            printf "  IRQ %s%d%s:%s%s%s -> %d\n" red n reset green descr reset (cntrs !! cpu)
 
 -- utilities
 --
@@ -346,11 +347,19 @@ getNumberOfIRQ dev = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
 getInterruptsByDevice :: Device -> [(Int, T.Text, [Int])]
 getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file -> do
     let irqLines  = T.pack <$> filter (=~ dev) (lines file)
-        irqColums = T.words <$> irqLines
-    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfPhyCores . tail) cs)) irqColums
+        irqColumns = T.words <$> irqLines
+    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfPhyCores . tail) cs)) irqColumns
 
 
 {-# NOINLINE getNumberOfPhyCores #-}
 getNumberOfPhyCores :: Int
 getNumberOfPhyCores = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
     return $ length $ filter ("processor" `T.isInfixOf`) $ T.lines file
+
+
+{-# NOINLINE getIRQCounters #-}
+getIRQCounters :: Int -> [Int]
+getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
+    let dev = T.pack $ show irq <> ":"
+        irqCol = read . T.unpack <$> (take getNumberOfPhyCores . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
+    return $ irqCol
