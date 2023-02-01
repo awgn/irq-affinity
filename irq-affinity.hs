@@ -220,7 +220,7 @@ setIrqAffinity :: Int -> [Int] -> BindIO ()
 setIrqAffinity irq cpus = do
     (op, _ ) <- get
     liftIO $ do
-        putStr $ "  irq " <> show irq <> " -> CPU " <> show cpus <> " {mask = " <> mask' <> "} "
+        putStr $ "  irq " <> show irq <> " →  CPU " <> show cpus <> " {mask = " <> mask' <> "} "
         if op.dryRun
             then putStrLn $ "[ " <> proc_irq <> show irq <> "/smp_affinity" <> " <- " <> mask' <> " ]"
             else putChar '\n' *> writeFile (proc_irq <> show irq <> "/smp_affinity") mask'
@@ -243,7 +243,7 @@ showBinding dev = do
 
     forM_ irq $ \(n,descr,_) -> do
         let cs = getIrqAffinity n
-        printf "  irq %s%d%s:%s%s%s -> cpu %v\n" red  n reset green descr reset (show cs)
+        printf "  irq %s%d%s:%s%s%s →  cpu %v\n" red  n reset green descr reset (show cs)
 
 -- show cpus irq map
 --
@@ -257,7 +257,7 @@ showAllCpuIRQs filts = do
                 if cpu `elem` cs
                     then return $ Just (n, cs)
                     else return Nothing
-        putStr $ "  cpu " <> show cpu <> " -> "
+        putStr $ "  cpu " <> show cpu <> " →  "
         forM_ (fst <$> catMaybes mat) $ \(n,descr) -> do
             let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
             when (or xs || null filts) $
@@ -283,7 +283,7 @@ showIRQ filts cpu = do
         let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
         when (or xs || null filts) $ do
             let cntrs = getIRQCounters n
-            printf "  IRQ %s%d%s:%s%s%s -> %d\n" red n reset green descr reset (cntrs !! cpu)
+            printf "  IRQ %s%d%s:%s%s%s →  %d\n" red n reset green descr reset (cntrs !! cpu)
 
 -- utilities
 --
