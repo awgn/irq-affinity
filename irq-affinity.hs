@@ -74,6 +74,7 @@ import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
 import Data.Bifunctor as B (second)
+import Data.Tuple.Extra
 
 bold, red, blue, green, reset :: T.Text
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
@@ -192,7 +193,7 @@ runBinding :: String -> [Int] -> BindIO ()
 runBinding dev cpus = do
     (op, _) <- get
 
-    let irqs = fst <$> getInterruptsByDevice dev
+    let irqs = fst3 <$> getInterruptsByDevice dev
 
     if | null irqs -> error ("irq-affinity: IRQs not found for the " <> dev <> " device!")
        | null cpus -> error "irq-affinity: No eligible CPU found!"
@@ -233,14 +234,14 @@ setIrqAffinity irq cpus = do
 showBinding :: String -> IO ()
 showBinding dev = do
     let irq = getInterruptsByDevice dev
-    let cpus = (nub . sort) (concatMap (getIrqAffinity . fst) irq)
+    let cpus = (nub . sort) (concatMap (getIrqAffinity . fst3) irq)
 
     putStrLn $ "IRQ binding for device " <> dev <> " on cpu "  <> show cpus <> " (" <>  show (length irq) <> " IRQs): "
 
     when (null irq) $
         error $ "irq-affinity: IRQ vector not found for dev " <> dev <> "!"
 
-    forM_ irq $ \(n,descr) -> do
+    forM_ irq $ \(n,descr,_) -> do
         let cs = getIrqAffinity n
         printf "  irq %s%d%s:%s%s%s -> cpu %v\n" red  n reset green descr reset (show cs)
 
@@ -318,7 +319,7 @@ mkEligibleCPUs dev excl f (IrqBinding f' step multi' filt) =
                       let n = x `mod` getNumberOfPhyCores,             -- modulo number of max CPUs
                       filt n,                                          -- whose elements pass the given predicate
                       n `notElem` excl ]                               -- and are not prensent in the exclusion list
-        where nqueue = getNumberOfQueues dev
+        where nqueue = getNumberOfIRQ dev
 
 
 -- get IRQ affinity, that is the list of the CPUs the given IRQ is bound to
@@ -335,16 +336,18 @@ getInterrupts = unsafePerformIO $ readFile proc_interrupt >>= \file ->
     return $ map (B.second (T.pack . last . words)) (concatMap reads $ lines file :: [(Int, String)])
 
 
-{-# NOINLINE getNumberOfQueues #-}
-getNumberOfQueues :: Device -> Int
-getNumberOfQueues dev = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
+{-# NOINLINE getNumberOfIRQ #-}
+getNumberOfIRQ :: Device -> Int
+getNumberOfIRQ dev = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
     return $ length $ filter (=~ dev) $ (lines . T.unpack) file
 
 
 {-# NOINLINE getInterruptsByDevice #-}
-getInterruptsByDevice :: Device -> [(Int, T.Text)]
-getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file ->
-    return $ map (\l -> (read . T.unpack $ T.takeWhile (/= ':') l, last . T.words $ l)) $ T.pack <$> filter (=~ dev) (lines file)
+getInterruptsByDevice :: Device -> [(Int, T.Text, [Int])]
+getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file -> do
+    let irqLines  = T.pack <$> filter (=~ dev) (lines file)
+        irqColums = T.words <$> irqLines
+    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfPhyCores . tail) cs)) irqColums
 
 
 {-# NOINLINE getNumberOfPhyCores #-}

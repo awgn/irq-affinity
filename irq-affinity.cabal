@@ -41,7 +41,8 @@ executable irq-affinity
                       split,
                       ansi-terminal,
                       text,
-                      regex-posix
+                      regex-posix,
+                      extra
   default-language:   Haskell2010
 
   if flag (StaticBuild) {
