@@ -100,6 +100,7 @@ type Device = String
 data Options = Options
     {   firstCPU    :: Int
     ,   exclude     :: [Int]
+    ,   range       :: (Int, Int)
     ,   strategy    :: Maybe String
     ,   oneToMany   :: Bool
     ,   showAllCPUs :: Bool
@@ -118,15 +119,16 @@ type CpuMask = Integer
 
 options :: Mode (CmdArgs Options)
 options = cmdArgsMode $ Options
-    {   firstCPU    = 0       &= typ "CPU"   &= help "First CPU involved in binding."
-    ,   exclude     = []      &= typ "CPU"   &= help "Exclude CPUs from binding."
-    ,   strategy    = Nothing                &= help "Strategies: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
-    ,   oneToMany   = False   &= explicit    &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
-    ,   showAllCPUs = False                  &= help "Display IRQs for all CPUs available."
-    ,   dryRun      = False                  &= help "Dry run, don't actually set affinity."
-    ,   showCPU     = []      &= explicit    &= name "cpu"  &= help "Display IRQs of the given CPUs set."
-    ,   bindIRQ     = def     &= explicit    &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
-    ,   arguments   = []                     &= args
+    {   firstCPU    = 0          &= typ "CPU"       &= help "First CPU involved in binding."
+    ,   exclude     = []         &= typ "CPU"       &= help "Exclude CPUs from binding."
+    ,   range       = (0, 65536) &= typ "MIN,MAX"   &= help "Range of CPUs involved in binding."
+    ,   strategy    = Nothing                   &= help "Strategies: round-robin, naive, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
+    ,   oneToMany   = False   &= explicit       &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
+    ,   showAllCPUs = False                     &= help "Display IRQs for all CPUs available."
+    ,   dryRun      = False                     &= help "Dry run, don't actually set affinity."
+    ,   showCPU     = []      &= explicit       &= name "cpu"  &= help "Display IRQs of the given CPUs set."
+    ,   bindIRQ     = def     &= explicit       &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
+    ,   arguments   = []                        &= args
     } &= summary "irq-affinity: a Linux interrupt affinity binding tool." &= program "irq-affinity"
 
 
@@ -134,24 +136,25 @@ options = cmdArgsMode $ Options
 --
 
 data IrqBinding = IrqBinding
-    {   firstCpu  :: Int
-    ,   stepCpu   :: Int
-    ,   multi     :: Int
-    ,   runFilter :: Int -> Bool
+    {   bFirst  :: Int
+    ,   bRange  :: (Int, Int)
+    ,   bStep   :: Int
+    ,   bMulti  :: Int
+    ,   bFilter :: Int -> Bool
     }
 
-makeIrqBinding :: [String] -> Int -> IrqBinding
-makeIrqBinding ["round-robin"]    _      = IrqBinding (-1)      1       1       none
-makeIrqBinding ["naive"]          first  = IrqBinding first     1       1       none
-makeIrqBinding ["multiple", m]    _      = IrqBinding (-1)      1    (read m)   none
-makeIrqBinding ["raster", m]      first  = IrqBinding first     1    (read m)   none
-makeIrqBinding ["even"]           first  = IrqBinding first     1       1       even
-makeIrqBinding ["odd"]            first  = IrqBinding first     1       1       odd
-makeIrqBinding ["any"]            _      = IrqBinding 0         0       0       none
-makeIrqBinding ["all-in", n]      _      = IrqBinding (read n)  0       1       none
-makeIrqBinding ["step",   s]      first  = IrqBinding first   (read s)  1       none
-makeIrqBinding ["custom", s, m]   first  = IrqBinding first   (read s) (read m) none
-makeIrqBinding _ _ =  error "irq-affinity: unknown IRQ binding strategy"
+makeIrqBinding :: [String] -> Int -> (Int, Int) -> IrqBinding
+makeIrqBinding ["round-robin"]    _      r = IrqBinding (-1)     r   1       1       none
+makeIrqBinding ["naive"]          first  r = IrqBinding first    r   1       1       none
+makeIrqBinding ["multiple", m]    _      r = IrqBinding (-1)     r   1    (read m)   none
+makeIrqBinding ["raster", m]      first  r = IrqBinding first    r   1    (read m)   none
+makeIrqBinding ["even"]           first  r = IrqBinding first    r   1       1       even
+makeIrqBinding ["odd"]            first  r = IrqBinding first    r   1       1       odd
+makeIrqBinding ["any"]            _      r = IrqBinding 0        r   0       0       none
+makeIrqBinding ["all-in", n]      _      r = IrqBinding (read n) r   0       1       none
+makeIrqBinding ["step",   s]      first  r = IrqBinding first    r (read s)  1       none
+makeIrqBinding ["custom", s, m]   first  r = IrqBinding first    r (read s) (read m) none
+makeIrqBinding _ _ _ =  error "irq-affinity: unknown IRQ binding strategy"
 
 none :: b -> Bool
 none = const True
@@ -183,11 +186,12 @@ runCmd Options{..}
 applyStrategy :: String -> BindIO ()
 applyStrategy dev = do
     (op, start) <- get
-    let alg  = makeIrqBinding (splitOneOf ":/" $ fromJust (strategy op)) (firstCPU op)
-        cpus = mkEligibleCPUs dev (exclude op) start alg
+    let binder  = makeIrqBinding (splitOneOf ":/" $ fromJust (strategy op)) (firstCPU op) (range op)
+        cpus = mkEligibleCPUs dev (exclude op) start binder
     runBinding dev cpus
 
 -- runBinding
+
 
 runBinding :: String -> [Int] -> BindIO ()
 runBinding dev cpus = do
@@ -313,13 +317,16 @@ getCpusListFromMask mask'  = [ n | n <- [0 .. 4095], let p2 = 1 `shiftL` n, mask
 --
 
 mkEligibleCPUs :: Device -> [Int] -> Int -> IrqBinding -> [Int]
-mkEligibleCPUs _ excl _ (IrqBinding 0 0 0 _) = [ n | n <- [0 .. getNumberOfPhyCores-1], n `notElem` excl ]
-mkEligibleCPUs dev excl f (IrqBinding f' step multi' filt) =
-    take nqueue [ n | let f''= if f' == -1 then f else f',
-                      x <- [f'', f''+ step .. ] >>= replicate multi',  -- make the list of eligible CPUs
+mkEligibleCPUs _ excl _ (IrqBinding 0 _ 0 0 _) = [ n | n <- [0 .. getNumberOfPhyCores-1], n `notElem` excl ]
+mkEligibleCPUs dev excl f (IrqBinding{..}) =
+    take nqueue [ n | let f''= if bFirst == -1 then f else bFirst,
+                      x <- [f'', f''+ bStep .. ] >>= replicate bMulti, -- make the list of eligible CPUs
                       let n = x `mod` getNumberOfPhyCores,             -- modulo number of max CPUs
-                      filt n,                                          -- whose elements pass the given predicate
-                      n `notElem` excl ]                               -- and are not prensent in the exclusion list
+                      bFilter n,                                       -- whose elements pass the given predicate
+                      n `notElem` excl,                                -- and are not present in the exclusion list
+                      n >= fst bRange,
+                      n <= snd bRange                                  -- and are in the given range
+                    ]
         where nqueue = getNumberOfIRQ dev
 
 
@@ -362,4 +369,4 @@ getIRQCounters :: Int -> [Int]
 getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
     let dev = T.pack $ show irq <> ":"
         irqCol = read . T.unpack <$> (take getNumberOfPhyCores . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
-    return $ irqCol
+    return irqCol
