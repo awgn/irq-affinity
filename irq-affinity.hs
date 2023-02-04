@@ -178,7 +178,7 @@ data CpuInfo = CpuInfo
        processor  :: {-# UNPACK #-} !Int
     ,  physicalId :: {-# UNPACK #-} !Int
     ,  coreId     :: {-# UNPACK #-} !Int
-    }
+    } deriving stock (Show, Eq)
 
 -- main function
 --
@@ -397,7 +397,7 @@ getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
 getCpuInfo :: [CpuInfo]
 getCpuInfo = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file -> do
     let cpuLines = T.lines file
-        cpuInfo  = chunksOf 3 $ decimal . (!! 2) . T.words <$>
+        cpuInfo  = chunksOf 3 $ decimal . T.drop 2 . T.dropWhile (/= ':') <$>
                     filter (\l -> "processor" `T.isPrefixOf` l || "physical id" `T.isPrefixOf` l || "core id" `T.isPrefixOf` l) cpuLines
     return $ map (\case
         [a,b,c] -> CpuInfo a b c
