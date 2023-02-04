@@ -341,12 +341,12 @@ mkEligibleCPUs :: Device -> [Int] -> Maybe Int -> IrqBinding -> [Int]
 mkEligibleCPUs _ excl _ (IrqBinding Nothing _ 0 0 _) = [ n | n <- [0 .. getNumberOfProcessors-1], n `notElem` excl ]
 mkEligibleCPUs dev excl f (IrqBinding{..}) =
     take nqueue [ n | let f' = fromMaybe (fromMaybe 0 f) bStart,
-                      x <- [f', f'+ bStep .. ] >>= replicate bMulti, -- make the list of eligible CPUs
-                      let n = x `mod` getNumberOfProcessors,              -- modulo number of max CPUs
-                      bFilter n,                                     -- whose elements pass the given predicate
-                      n `notElem` excl,                              -- and are not present in the exclusion list
+                      x <- [f', f'+ bStep .. 4096] >>= replicate bMulti,    -- make the list of eligible CPUs
+                      let n = x `mod` getNumberOfProcessors,                -- modulo number of max CPUs
+                      bFilter n,                                            -- whose elements pass the given predicate
+                      n `notElem` excl,                                     -- and are not present in the exclusion list
                       n >= fst bRange,
-                      n <= snd bRange                                -- and are in the given range
+                      n <= snd bRange                                       -- and are in the given range
                 ]
         where nqueue = getNumberOfIRQ dev
 
