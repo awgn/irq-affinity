@@ -22,13 +22,14 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Main (module Main) where
 
 
 import Data.Maybe ( catMaybes, fromJust, fromMaybe )
 import Data.List(nub, sort)
-import Data.List.Split(splitOneOf)
+import Data.List.Split(splitOneOf, chunksOf)
 import Control.Monad.State
     ( forM_,
       void,
@@ -48,6 +49,7 @@ import Data.Bits ( Bits((.&.), (.|.), shiftL) )
 import Data.Data ( Data, Typeable )
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+import qualified Data.Text.Read as T
 
 import System.Console.ANSI
     ( setSGRCode,
@@ -69,12 +71,13 @@ import System.Console.CmdArgs
       typ,
       Default(def),
       Mode,
-      CmdArgs )
+      CmdArgs, groupname )
 import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
 import Data.Bifunctor as B (second)
 import Data.Tuple.Extra ( fst3 )
+import Data.Either ( fromRight )
 
 bold, red, blue, green, reset :: T.Text
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
@@ -99,14 +102,15 @@ type Device = String
 
 data Options = Options
     {   firstCPU    :: Maybe Int
-    ,   exclude     :: [Int]
     ,   range       :: (Int, Int)
     ,   strategy    :: Maybe String
     ,   oneToMany   :: Bool
     ,   showAll     :: Bool
     ,   dryRun      :: Bool
-    ,   showCPU     :: [Int]
     ,   bindIRQ     :: Device
+    ,   exclude     :: [Int]
+    ,   package     :: Maybe Int
+    ,   showCPU     :: [Int]
     ,   arguments   :: [String]
     } deriving stock (Data, Typeable, Show)
 
@@ -120,14 +124,15 @@ type CpuMask = Integer
 options :: Mode (CmdArgs Options)
 options = cmdArgsMode $ Options
     {   firstCPU    = Nothing    &= typ "INT"       &= help "First CPU involved in binding."
-    ,   exclude     = []         &= typ "INT"       &= help "Exclude CPUs from binding."
     ,   range       = (0, 4095)  &= typ "MIN,MAX"   &= help "Range of CPUs involved in binding."
     ,   strategy    = Nothing    &= typ "NAME"      &= help "Strategies: basic, round-robin, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
     ,   oneToMany   = False   &= explicit           &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
     ,   showAll     = False   &= explicit           &= name "show" &= help "Display IRQs for all CPUs available."
     ,   dryRun      = False                         &= help "Dry run, don't actually set affinity."
-    ,   showCPU     = []      &= explicit           &= name "cpu"  &= help "Display IRQs of the given CPUs set."
     ,   bindIRQ     = def     &= explicit           &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
+    ,   exclude     = []         &= typ "INT"       &= groupname "Filters" &= help "Exclude CPUs from binding."
+    ,   package     = Nothing &= typ "INT"          &= help "Apply then strategy to the given package (physical id)."
+    ,   showCPU     = []      &= explicit           &= groupname "Display" &= name "cpu"  &= help "Display IRQs of the given CPUs set."
     ,   arguments   = []                            &= args
     } &= summary "irq-affinity: a Linux interrupt affinity binding tool." &= program "irq-affinity"
 
@@ -143,21 +148,40 @@ data IrqBinding = IrqBinding
     ,   bFilter :: Int -> Bool
     }
 
-makeIrqBinding :: [String] -> Maybe Int -> (Int, Int) -> IrqBinding
-makeIrqBinding ["basic"]          first  r = IrqBinding first    r          1       1       none
-makeIrqBinding ["round-robin"]    _      r = IrqBinding Nothing  r          1       1       none
-makeIrqBinding ["multiple", m]    _      r = IrqBinding Nothing  r          1    (read m)   none
-makeIrqBinding ["raster", m]      first  r = IrqBinding first    r          1    (read m)   none
-makeIrqBinding ["even"]           first  r = IrqBinding first    r          1       1       even
-makeIrqBinding ["odd"]            first  r = IrqBinding first    r          1       1       odd
-makeIrqBinding ["any"]            _      r = IrqBinding (Just 0) r          0       0       none
-makeIrqBinding ["all-in", n]      _      r = IrqBinding (Just (read n)) r   0       1       none
-makeIrqBinding ["step",   s]      first  r = IrqBinding first    r       (read s)   1       none
-makeIrqBinding ["custom", s, m]   first  r = IrqBinding first    r       (read s) (read m)  none
-makeIrqBinding _ _ _ =  error "irq-affinity: unknown IRQ binding strategy"
+{-# INLINE (&&&) #-}
+(&&&) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
+(&&&) f g x = f x && g x
+
+
+phyFilter :: Maybe Int -> Int -> Bool
+phyFilter Nothing  _ = True
+phyFilter (Just p) x = physicalId (getCpuInfo !! (x `mod` length getCpuInfo)) == p
+
+
+makeIrqBinding :: [String] -> Maybe Int -> (Int, Int) -> Maybe Int -> IrqBinding
+makeIrqBinding ["basic"]          first  r phy = IrqBinding first    r          1       1       (none &&& phyFilter phy)
+makeIrqBinding ["round-robin"]    _      r phy = IrqBinding Nothing  r          1       1       (none &&& phyFilter phy)
+makeIrqBinding ["multiple", m]    _      r phy = IrqBinding Nothing  r          1    (read m)   (none &&& phyFilter phy)
+makeIrqBinding ["raster", m]      first  r phy = IrqBinding first    r          1    (read m)   (none &&& phyFilter phy)
+makeIrqBinding ["even"]           first  r phy = IrqBinding first    r          1       1       (even &&& phyFilter phy)
+makeIrqBinding ["odd"]            first  r phy = IrqBinding first    r          1       1       (odd  &&& phyFilter phy)
+makeIrqBinding ["any"]            _      r phy = IrqBinding (Just 0) r          0       0       (none &&& phyFilter phy)
+makeIrqBinding ["all-in", n]      _      r phy = IrqBinding (Just (read n)) r   0       1       (none &&& phyFilter phy)
+makeIrqBinding ["step",   s]      first  r phy = IrqBinding first    r       (read s)   1       (none &&& phyFilter phy)
+makeIrqBinding ["custom", s, m]   first  r phy = IrqBinding first    r       (read s) (read m)  (none &&& phyFilter phy)
+makeIrqBinding _ _ _ _ =  error "irq-affinity: unknown IRQ binding strategy"
 
 none :: b -> Bool
 none = const True
+
+-- CpuInfo
+
+data CpuInfo = CpuInfo
+    {
+       processor  :: Int
+    ,  physicalId :: Int
+    ,  coreId     :: Int
+    }
 
 -- main function
 --
@@ -185,7 +209,7 @@ runCmd Options{..}
 applyStrategy :: String -> BindIO ()
 applyStrategy dev = do
     (op, start) <- get
-    let binder  = makeIrqBinding (splitOneOf ":/" $ fromJust (op.strategy)) op.firstCPU op.range
+    let binder  = makeIrqBinding (splitOneOf ":/" $ fromJust (op.strategy)) op.firstCPU op.range op.package
         cpus = mkEligibleCPUs dev (op.exclude) start binder
     runBinding dev cpus
 
@@ -255,7 +279,7 @@ showBinding dev = do
 showAllCpuIRQs ::[T.Text] -> IO ()
 showAllCpuIRQs filts = do
     let irqs = getInterrupts
-    forM_ [0..getNumberOfPhyCores-1] $ \cpu -> do
+    forM_ [0..getNumberOfProcessors-1] $ \cpu -> do
         mat <- forM irqs $ \n -> do
                 let cs = getIrqAffinity (fst n)
                 if cpu `elem` cs
@@ -317,11 +341,11 @@ getCpusListFromMask mask'  = [ n | n <- [0 .. 4095], let p2 = 1 `shiftL` n, mask
 --
 
 mkEligibleCPUs :: Device -> [Int] -> Maybe Int -> IrqBinding -> [Int]
-mkEligibleCPUs _ excl _ (IrqBinding Nothing _ 0 0 _) = [ n | n <- [0 .. getNumberOfPhyCores-1], n `notElem` excl ]
+mkEligibleCPUs _ excl _ (IrqBinding Nothing _ 0 0 _) = [ n | n <- [0 .. getNumberOfProcessors-1], n `notElem` excl ]
 mkEligibleCPUs dev excl f (IrqBinding{..}) =
     take nqueue [ n | let f' = fromMaybe (fromMaybe 0 f) bStart,
                       x <- [f', f'+ bStep .. ] >>= replicate bMulti, -- make the list of eligible CPUs
-                      let n = x `mod` getNumberOfPhyCores,           -- modulo number of max CPUs
+                      let n = x `mod` getNumberOfProcessors,              -- modulo number of max CPUs
                       bFilter n,                                     -- whose elements pass the given predicate
                       n `notElem` excl,                              -- and are not present in the exclusion list
                       n >= fst bRange,
@@ -355,12 +379,12 @@ getInterruptsByDevice :: Device -> [(Int, T.Text, [Int])]
 getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file -> do
     let irqLines  = T.pack <$> filter (=~ dev) (lines file)
         irqColumns = T.words <$> irqLines
-    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfPhyCores . tail) cs)) irqColumns
+    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfProcessors . tail) cs)) irqColumns
 
 
-{-# NOINLINE getNumberOfPhyCores #-}
-getNumberOfPhyCores :: Int
-getNumberOfPhyCores = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
+{-# NOINLINE getNumberOfProcessors #-}
+getNumberOfProcessors :: Int
+getNumberOfProcessors = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
     return $ length $ filter ("processor" `T.isInfixOf`) $ T.lines file
 
 
@@ -368,5 +392,16 @@ getNumberOfPhyCores = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
 getIRQCounters :: Int -> [Int]
 getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
     let dev = T.pack $ show irq <> ":"
-        irqCol = read . T.unpack <$> (take getNumberOfPhyCores . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
+        irqCol = read . T.unpack <$> (take getNumberOfProcessors . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
     return irqCol
+
+
+{-# NOINLINE getCpuInfo #-}
+getCpuInfo :: [CpuInfo]
+getCpuInfo = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file -> do
+    let cpuLines = T.lines file
+        cpuInfo  = chunksOf 3 $ fst . fromRight (0, "") . T.decimal . (!! 2) . T.words <$>
+                    filter (\l -> "processor" `T.isPrefixOf` l || "physical id" `T.isPrefixOf` l || "core id" `T.isPrefixOf` l) cpuLines
+    return $ map (\case
+        [a,b,c] -> CpuInfo a b c
+        _       -> error "cpuinfo: parse error") cpuInfo
