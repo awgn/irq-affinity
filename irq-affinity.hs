@@ -159,28 +159,25 @@ phyFilter (Just p) x = physicalId (getCpuInfo !! (x `mod` length getCpuInfo)) ==
 
 
 makeIrqBinding :: [String] -> Maybe Int -> (Int, Int) -> Maybe Int -> IrqBinding
-makeIrqBinding ["basic"]          first  r phy = IrqBinding first    r          1       1       (none &&& phyFilter phy)
-makeIrqBinding ["round-robin"]    _      r phy = IrqBinding Nothing  r          1       1       (none &&& phyFilter phy)
-makeIrqBinding ["multiple", m]    _      r phy = IrqBinding Nothing  r          1    (read m)   (none &&& phyFilter phy)
-makeIrqBinding ["raster", m]      first  r phy = IrqBinding first    r          1    (read m)   (none &&& phyFilter phy)
-makeIrqBinding ["even"]           first  r phy = IrqBinding first    r          1       1       (even &&& phyFilter phy)
-makeIrqBinding ["odd"]            first  r phy = IrqBinding first    r          1       1       (odd  &&& phyFilter phy)
-makeIrqBinding ["any"]            _      r phy = IrqBinding (Just 0) r          0       0       (none &&& phyFilter phy)
-makeIrqBinding ["all-in", n]      _      r phy = IrqBinding (Just (read n)) r   0       1       (none &&& phyFilter phy)
-makeIrqBinding ["step",   s]      first  r phy = IrqBinding first    r       (read s)   1       (none &&& phyFilter phy)
-makeIrqBinding ["custom", s, m]   first  r phy = IrqBinding first    r       (read s) (read m)  (none &&& phyFilter phy)
+makeIrqBinding ["basic"]          first  r phy = IrqBinding first    r          1       1       (phyFilter phy)
+makeIrqBinding ["round-robin"]    _      r phy = IrqBinding Nothing  r          1       1       (phyFilter phy)
+makeIrqBinding ["multiple", m]    _      r phy = IrqBinding Nothing  r          1    (read m)   (phyFilter phy)
+makeIrqBinding ["raster", m]      first  r phy = IrqBinding first    r          1    (read m)   (phyFilter phy)
+makeIrqBinding ["even"]           first  r phy = IrqBinding first    r          1       1       (phyFilter phy &&& even)
+makeIrqBinding ["odd"]            first  r phy = IrqBinding first    r          1       1       (phyFilter phy &&& odd)
+makeIrqBinding ["any"]            _      r phy = IrqBinding (Just 0) r          0       0       (phyFilter phy)
+makeIrqBinding ["all-in", n]      _      r phy = IrqBinding (Just (read n)) r   0       1       (phyFilter phy)
+makeIrqBinding ["step",   s]      first  r phy = IrqBinding first    r       (read s)   1       (phyFilter phy)
+makeIrqBinding ["custom", s, m]   first  r phy = IrqBinding first    r       (read s) (read m)  (phyFilter phy)
 makeIrqBinding _ _ _ _ =  error "irq-affinity: unknown IRQ binding strategy"
-
-none :: b -> Bool
-none = const True
 
 -- CpuInfo
 
 data CpuInfo = CpuInfo
     {
-       processor  :: Int
-    ,  physicalId :: Int
-    ,  coreId     :: Int
+       processor  :: {-# UNPACK #-} !Int
+    ,  physicalId :: {-# UNPACK #-} !Int
+    ,  coreId     :: {-# UNPACK #-} !Int
     }
 
 -- main function
@@ -370,8 +367,8 @@ getInterrupts = unsafePerformIO $ readFile proc_interrupt >>= \file ->
 
 {-# NOINLINE getNumberOfIRQ #-}
 getNumberOfIRQ :: Device -> Int
-getNumberOfIRQ dev = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
-    return $ length $ filter (=~ dev) $ (lines . T.unpack) file
+getNumberOfIRQ dev = unsafePerformIO $ readFile proc_interrupt >>= \file ->
+    return $ length $ filter (=~ dev) $ lines file
 
 
 {-# NOINLINE getInterruptsByDevice #-}
@@ -379,7 +376,7 @@ getInterruptsByDevice :: Device -> [(Int, T.Text, [Int])]
 getInterruptsByDevice dev = unsafePerformIO $ readFile proc_interrupt >>= \file -> do
     let irqLines  = T.pack <$> filter (=~ dev) (lines file)
         irqColumns = T.words <$> irqLines
-    return $ map (\cs -> ((read . T.unpack . T.takeWhile (/= ':')) (head cs), last cs, read . T.unpack <$> (take getNumberOfProcessors . tail) cs)) irqColumns
+    return $ map (\cs -> ((decimal . T.takeWhile (/= ':')) (head cs), last cs, decimal <$> (take getNumberOfProcessors . tail) cs)) irqColumns
 
 
 {-# NOINLINE getNumberOfProcessors #-}
@@ -392,7 +389,7 @@ getNumberOfProcessors = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file ->
 getIRQCounters :: Int -> [Int]
 getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
     let dev = T.pack $ show irq <> ":"
-        irqCol = read . T.unpack <$> (take getNumberOfProcessors . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
+        irqCol = decimal <$> (take getNumberOfProcessors . tail $ concatMap T.words $ filter ((== dev) . head . T.words) (T.lines file)) :: [Int]
     return irqCol
 
 
@@ -400,8 +397,12 @@ getIRQCounters irq = unsafePerformIO $ T.readFile proc_interrupt >>= \file -> do
 getCpuInfo :: [CpuInfo]
 getCpuInfo = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file -> do
     let cpuLines = T.lines file
-        cpuInfo  = chunksOf 3 $ fst . fromRight (0, "") . T.decimal . (!! 2) . T.words <$>
+        cpuInfo  = chunksOf 3 $ decimal . (!! 2) . T.words <$>
                     filter (\l -> "processor" `T.isPrefixOf` l || "physical id" `T.isPrefixOf` l || "core id" `T.isPrefixOf` l) cpuLines
     return $ map (\case
         [a,b,c] -> CpuInfo a b c
         _       -> error "cpuinfo: parse error") cpuInfo
+
+{-# INLINE decimal #-}
+decimal :: T.Text -> Int
+decimal = fst .  fromRight (-1, "") . T.decimal
