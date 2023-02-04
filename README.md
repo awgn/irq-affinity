@@ -28,4 +28,31 @@ Copied executables to /home/user/.local/bin:
 
 ```
 
+Usage
+-----
 
+```
+irq-affinity: a Linux interrupt affinity binding tool.
+
+irq-affinity [OPTIONS] [ITEM]
+
+Common flags:
+  -f --firstcpu=INT    First CPU involved in binding.
+  -r --range=MIN,MAX   Range of CPUs involved in binding.
+     --strategy=NAME   Strategies: basic, round-robin, multiple/n, raster/n,
+                       even, odd, any, all-in:id, step:id, custom:step/multi.
+     --one-to-many     Bind each IRQ to every eligible CPU. Note: by default
+                       irq affinity is set one-to-one.
+     --show --showall  Display IRQs for all CPUs available.
+  -d --dryrun          Dry run, don't actually set affinity.
+     --bind=ITEM       Set the IRQs affinity of the given device (e.g.,
+                       --bind eth0 1 2).
+Filters:
+  -e --exclude=INT     Exclude CPUs from binding.
+  -p --package=INT     Apply then strategy to the given package (physical
+                       id).
+Display:
+     --cpu=INT         Display IRQs of the given CPUs set.
+  -? --help            Display help message
+  -V --version         Print version information
+```
