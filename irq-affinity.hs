@@ -76,7 +76,6 @@ import System.Console.CmdArgs
 import System.IO.Unsafe ( unsafePerformIO )
 import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
-import Data.Bifunctor as B (second)
 import Data.Tuple.Extra ( fst3 )
 import Data.Either ( fromRight )
 
@@ -181,6 +180,12 @@ data CpuInfo = CpuInfo
     ,  coreId     :: {-# UNPACK #-} !Int
     } deriving stock (Show, Eq)
 
+
+data IRQ = IRQ {
+        number      :: {-# UNPACK #-} !Int
+    ,   description :: {-# UNPACK #-} !T.Text
+    } deriving stock (Show, Eq)
+
 -- main function
 --
 
@@ -280,16 +285,16 @@ showAllCpuIRQs filts = do
 
     forM_ [0..getNumberOfProcessors-1] $ \cpu -> do
         mat <- catMaybes <$> forM irqs (\irq -> do
-                let cs = getIrqAffinity (fst irq)
+                let cs = getIrqAffinity (irq.number)
                 if cpu `elem` cs
                     then return $ Just irq
                     else return Nothing)
 
         putStr $ "  cpu " <> show cpu <> " →  "
-        forM_ mat $ \(n,descr) -> do
-            let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
+        forM_ mat $ \irq -> do
+            let xs  = fmap (T.unpack irq.description =~) (T.unpack <$> filts) :: [Bool]
             when (or xs || null filts) $
-                printf "%s%d%s:%s%s%s " red n reset green descr reset
+                printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
         T.putStr "\n"
 
 -- show IRQ list of a given cpu
@@ -301,18 +306,17 @@ showIRQ filts cpu = do
 
     putStrLn $ "CPU " <> show cpu <> ":"
 
-    mat <- catMaybes <$> forM irqs (\n -> do
-        let cs = getIrqAffinity (fst n)
+    out <- catMaybes <$> forM irqs (\irq -> do
+        let cs = getIrqAffinity irq.number
         if cpu `elem` cs
-            then return $ Just (n, cs)
+            then return $ Just irq
             else return Nothing)
 
-    let out = fst <$> mat
-    forM_ out $ \(n,descr) -> do
-        let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
+    forM_ out $ \irq -> do
+        let xs  = fmap (T.unpack irq.description =~) (T.unpack <$> filts) :: [Bool]
         when (or xs || null filts) $ do
-            let cntrs = getIRQCounters n
-            printf "  IRQ %s%d%s:%s%s%s →  %d\n" red n reset green descr reset (cntrs !! cpu)
+            let cntrs = getIRQCounters irq.number
+            printf "  IRQ %s%d%s:%s%s%s →  %d\n" red irq.number reset green irq.description reset (cntrs !! cpu)
 
 -- utilities
 --
@@ -381,9 +385,9 @@ getIrqAffinity irq =  unsafePerformIO $
 
 
 {-# NOINLINE getInterrupts #-}
-getInterrupts :: [(Int, T.Text)]
+getInterrupts :: [IRQ]
 getInterrupts = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
-    return $ map (B.second (T.unwords . drop (3+getNumberOfProcessors) . T.words)) (concatMap readsDecimal $ T.lines file :: [(Int, T.Text)])
+    return $ map (\(n, d) -> IRQ n ((T.unwords . drop (3+getNumberOfProcessors) . T.words) d)) (concatMap readsDecimal $ T.lines file :: [(Int, T.Text)])
 
 
 {-# NOINLINE getNumberOfIRQ #-}
