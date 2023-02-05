@@ -50,6 +50,7 @@ import Data.Data ( Data, Typeable )
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Read as T
+import Data.Char (isSpace)
 
 import System.Console.ANSI
     ( setSGRCode,
@@ -295,6 +296,7 @@ showAllCpuIRQs filts = do
 showIRQ :: [T.Text] -> Int -> IO ()
 showIRQ filts cpu = do
     let irqs = getInterrupts
+
     putStrLn $ "CPU " <> show cpu <> ":"
 
     mat <- catMaybes <$> forM irqs (\n -> do
@@ -355,9 +357,12 @@ mkEligibleCPUs dev excl f (IrqBinding{..}) =
 decimal :: T.Text -> Int
 decimal = fst .  fromRight (-1, "") . T.decimal
 
+
 {-# INLINE readsDecimal #-}
 readsDecimal :: (Integral a) => T.Text -> [(a, T.Text)]
-readsDecimal t = (:[]) $ fromRight (-1, t) (T.decimal t)
+readsDecimal t = case fromRight (-1, t) ((T.decimal . T.dropWhile isSpace) t) of
+    (-1, _ ) -> []
+    r        -> [r]
 
 
 -- get IRQ affinity, that is the list of the CPUs the given IRQ is bound to
