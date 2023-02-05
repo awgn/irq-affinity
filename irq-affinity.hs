@@ -200,7 +200,7 @@ main = handle (\(ErrorCall msg) -> putStrBoldLn (red <> T.pack msg <> reset) *> 
 runCmd :: Options -> BindIO ()
 runCmd Options{..}
     | Just _  <- strategy   = forM_ arguments $ \dev -> applyStrategy dev
-    | showAll               = liftIO $ showAllCpuIRQs (T.pack <$> arguments)
+    | showAll               = liftIO $ showAllIRQs (T.pack <$> arguments)
     | not $ null showCPU    = liftIO $ mapM_ (showIRQ (T.pack <$> arguments)) showCPU
     | not $ null bindIRQ    = runBinding bindIRQ (map read arguments)
     | not $ null arguments  = liftIO $ mapM_ showBinding arguments
@@ -279,16 +279,8 @@ showBinding dev = do
 -- show cpus irq map
 --
 
-
-reverseMap :: [(IRQ, [Int])] -> [(Int, [IRQ])]
-reverseMap irqs = do
-    let cpus = nub $ sort $ concatMap snd irqs
-    cpu <- cpus
-    let irqs' = filter (\(_,cs) -> cpu `elem` cs) irqs
-    return (cpu, fst <$> irqs')
-
-showAllCpuIRQs ::[T.Text] -> IO ()
-showAllCpuIRQs filts = do
+showAllIRQs ::[T.Text] -> IO ()
+showAllIRQs filts = do
     let irqs = (\irq -> (irq, getIrqAffinity (irq.number))) <$> getInterrupts
 
     let sfilter = T.unpack <$> filts
@@ -296,10 +288,17 @@ showAllCpuIRQs filts = do
     forM_ (reverseMap irqs) $ \(cpu, irqs') -> do
         putStr $ "  cpu " <> show cpu <> " →  "
 
-        let irqs'' = filter (\irq -> (or $ (T.unpack irq.description =~) <$> sfilter) || null sfilter) irqs'
+        let irqs'' = filter (\irq -> null sfilter|| or ((T.unpack irq.description =~) <$> sfilter)) irqs'
         forM_ irqs'' $ \irq -> do
             printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
         T.putStr "\n"
+
+reverseMap :: [(IRQ, [Int])] -> [(Int, [IRQ])]
+reverseMap irqs = do
+    let cpus = nub $ sort $ concatMap snd irqs
+    cpu <- cpus
+    let irqs' = filter (\(_,cs) -> cpu `elem` cs) irqs
+    return (cpu, fst <$> irqs')
 
 -- show IRQ list of a given cpu
 --
