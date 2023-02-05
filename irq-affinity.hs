@@ -35,6 +35,7 @@ import Control.Monad.State
       void,
       forM,
       when,
+      unless,
       MonadIO(liftIO),
       evalStateT,
       MonadState(put, get),
@@ -127,7 +128,7 @@ options = cmdArgsMode $ Options
     ,   strategy    = Nothing    &= typ "NAME"      &= help "Strategies: basic, round-robin, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
     ,   oneToMany   = False   &= explicit           &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
     ,   showAll     = False   &= explicit           &= name "show" &= help "Display IRQs for all CPUs available."
-    ,   dryRun      = False                         &= help "Dry run, don't actually set affinity."
+    ,   dryRun      = False                         &= help "Dry run, don't actually set IRQ affinity."
     ,   bindIRQ     = def     &= explicit           &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
     ,   exclude     = []         &= typ "INT"       &= groupname "Filters" &= help "Exclude CPUs from binding."
     ,   package     = Nothing &= typ "INT"          &= help "Apply then strategy to the given package (physical id)."
@@ -286,12 +287,13 @@ showAllIRQs filts = do
     let sfilter = T.unpack <$> filts
 
     forM_ (reverseMap irqs) $ \(cpu, irqs') -> do
-        putStr $ "  cpu " <> show cpu <> " →  "
 
         let irqs'' = filter (\irq -> null sfilter|| or ((T.unpack irq.description =~) <$> sfilter)) irqs'
-        forM_ irqs'' $ \irq -> do
-            printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
-        T.putStr "\n"
+        unless (null irqs'') $ do
+            putStr $ "  cpu " <> show cpu <> " →  "
+            forM_ irqs'' $ \irq -> do
+                printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
+            T.putStr "\n"
 
 reverseMap :: [(IRQ, [Int])] -> [(Int, [IRQ])]
 reverseMap irqs = do
