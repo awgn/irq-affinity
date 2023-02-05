@@ -351,6 +351,15 @@ mkEligibleCPUs dev excl f (IrqBinding{..}) =
         where nqueue = getNumberOfIRQ dev
 
 
+{-# INLINE decimal #-}
+decimal :: T.Text -> Int
+decimal = fst .  fromRight (-1, "") . T.decimal
+
+{-# INLINE readsDecimal #-}
+readsDecimal :: (Integral a) => T.Text -> [(a, T.Text)]
+readsDecimal t = (:[]) $ fromRight (-1, t) (T.decimal t)
+
+
 -- get IRQ affinity, that is the list of the CPUs the given IRQ is bound to
 
 {-# NOINLINE getIrqAffinity #-}
@@ -361,8 +370,8 @@ getIrqAffinity irq =  unsafePerformIO $
 
 {-# NOINLINE getInterrupts #-}
 getInterrupts :: [(Int, T.Text)]
-getInterrupts = unsafePerformIO $ readFile proc_interrupt >>= \file ->
-    return $ map (B.second (T.pack . last . words)) (concatMap reads $ lines file :: [(Int, String)])
+getInterrupts = unsafePerformIO $ T.readFile proc_interrupt >>= \file ->
+    return $ map (B.second (T.unwords . drop (3+getNumberOfProcessors) . T.words)) (concatMap readsDecimal $ T.lines file :: [(Int, T.Text)])
 
 
 {-# NOINLINE getNumberOfIRQ #-}
@@ -402,7 +411,3 @@ getCpuInfo = unsafePerformIO $ T.readFile proc_cpuinfo >>= \file -> do
     return $ map (\case
         [a,b,c] -> CpuInfo a b c
         _       -> error "cpuinfo: parse error") cpuInfo
-
-{-# INLINE decimal #-}
-decimal :: T.Text -> Int
-decimal = fst .  fromRight (-1, "") . T.decimal
