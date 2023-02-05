@@ -277,14 +277,16 @@ showBinding dev = do
 showAllCpuIRQs ::[T.Text] -> IO ()
 showAllCpuIRQs filts = do
     let irqs = getInterrupts
+
     forM_ [0..getNumberOfProcessors-1] $ \cpu -> do
-        mat <- forM irqs $ \n -> do
-                let cs = getIrqAffinity (fst n)
+        mat <- catMaybes <$> forM irqs (\irq -> do
+                let cs = getIrqAffinity (fst irq)
                 if cpu `elem` cs
-                    then return $ Just (n, cs)
-                    else return Nothing
+                    then return $ Just irq
+                    else return Nothing)
+
         putStr $ "  cpu " <> show cpu <> " →  "
-        forM_ (fst <$> catMaybes mat) $ \(n,descr) -> do
+        forM_ mat $ \(n,descr) -> do
             let xs  = fmap (T.unpack descr =~) (T.unpack <$> filts) :: [Bool]
             when (or xs || null filts) $
                 printf "%s%d%s:%s%s%s " red n reset green descr reset
@@ -321,20 +323,25 @@ intersperseEvery n x xs = zip xs [1 .. l] >>= ins
         l = length xs
 
 
+{-# INLINE showMask #-}
 showMask :: CpuMask -> String
 showMask mask' = reverse . intersperseEvery 8 ',' . reverse $ showHex mask' ""
 
 
+{-# INLINE readMask #-}
 readMask :: String -> CpuMask
 readMask = fst . head . readHex . filter (/= ',')
 
 
+{-# INLINE makeCpuMask #-}
 makeCpuMask :: [Int] -> CpuMask
 makeCpuMask = foldr (\cpu mask' -> mask' .|. (1 `shiftL` cpu)) (0 :: CpuMask)
 
 
-getCpusListFromMask :: CpuMask -> [Int]
-getCpusListFromMask mask'  = [ n | n <- [0 .. 4095], let p2 = 1 `shiftL` n, mask' .&. p2 /= 0 ]
+{-# INLINE getCpusFromMask #-}
+getCpusFromMask :: CpuMask -> [Int]
+getCpusFromMask mask'  = [ n | n <- [0 .. 4095], let p2 = 1 `shiftL` n, mask' .&. p2 /= 0 ]
+
 
 -- given a device and a bind-strategy, create the list of eligible cpu
 --
@@ -370,7 +377,7 @@ readsDecimal t = case fromRight (-1, t) ((T.decimal . T.dropWhile isSpace) t) of
 {-# NOINLINE getIrqAffinity #-}
 getIrqAffinity :: Int -> [Int]
 getIrqAffinity irq =  unsafePerformIO $
-    getCpusListFromMask . readMask <$> readFile (proc_irq <> show irq <> "/smp_affinity")
+    getCpusFromMask . readMask <$> readFile (proc_irq <> show irq <> "/smp_affinity")
 
 
 {-# NOINLINE getInterrupts #-}
