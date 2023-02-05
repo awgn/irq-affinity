@@ -279,22 +279,26 @@ showBinding dev = do
 -- show cpus irq map
 --
 
+
+reverseMap :: [(IRQ, [Int])] -> [(Int, [IRQ])]
+reverseMap irqs = do
+    let cpus = nub $ sort $ concatMap snd irqs
+    cpu <- cpus
+    let irqs' = filter (\(_,cs) -> cpu `elem` cs) irqs
+    return (cpu, fst <$> irqs')
+
 showAllCpuIRQs ::[T.Text] -> IO ()
 showAllCpuIRQs filts = do
-    let irqs = getInterrupts
+    let irqs = (\irq -> (irq, getIrqAffinity (irq.number))) <$> getInterrupts
 
-    forM_ [0..getNumberOfProcessors-1] $ \cpu -> do
-        mat <- catMaybes <$> forM irqs (\irq -> do
-                let cs = getIrqAffinity (irq.number)
-                if cpu `elem` cs
-                    then return $ Just irq
-                    else return Nothing)
+    let sfilter = T.unpack <$> filts
 
+    forM_ (reverseMap irqs) $ \(cpu, irqs') -> do
         putStr $ "  cpu " <> show cpu <> " →  "
-        forM_ mat $ \irq -> do
-            let xs  = fmap (T.unpack irq.description =~) (T.unpack <$> filts) :: [Bool]
-            when (or xs || null filts) $
-                printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
+
+        let irqs'' = filter (\irq -> (or $ (T.unpack irq.description =~) <$> sfilter) || null sfilter) irqs'
+        forM_ irqs'' $ \irq -> do
+            printf "%s%d%s:%s%s%s " red irq.number reset green irq.description reset
         T.putStr "\n"
 
 -- show IRQ list of a given cpu
