@@ -79,6 +79,8 @@ import System.Environment (withArgs)
 import System.Exit ( exitWith, ExitCode(ExitFailure) )
 import Data.Tuple.Extra ( fst3 )
 import Data.Either ( fromRight )
+import qualified Paths_irq_affinity as P
+import Data.Version as V (showVersion)
 
 bold, red, blue, green, reset :: T.Text
 bold  = T.pack $ setSGRCode [SetConsoleIntensity BoldIntensity]
@@ -124,18 +126,18 @@ type CpuMask = Integer
 
 options :: Mode (CmdArgs Options)
 options = cmdArgsMode $ Options
-    {   firstCPU    = Nothing    &= typ "INT"       &= help "First CPU involved in binding."
-    ,   strategy    = Nothing    &= typ "NAME"      &= help "Strategies: basic, round-robin, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
-    ,   oneToMany   = False   &= explicit           &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
-    ,   showAll     = False   &= explicit           &= name "show" &= help "Display IRQs for all CPUs available."
+    {   firstCPU    = Nothing   &= typ "INT"        &= help "First CPU involved in binding."
+    ,   strategy    = Nothing   &= typ "NAME"       &= help "Strategies: basic, round-robin, multiple/n, raster/n, even, odd, any, all-in:id, step:id, custom:step/multi."
+    ,   oneToMany   = False     &= explicit         &= name "one-to-many" &= help "Bind each IRQ to every eligible CPU. Note: by default irq affinity is set one-to-one."
+    ,   showAll     = False     &= explicit         &= name "show" &= help "Display IRQs for all CPUs available."
     ,   dryRun      = False                         &= help "Dry run, don't actually set IRQ affinity."
-    ,   bindIRQ     = def     &= explicit           &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
-    ,   exclude     = []         &= typ "INT"       &= groupname "Filters" &= help "Exclude CPUs from binding."
-    ,   package     = Nothing &= typ "INT"          &= help "Apply then strategy to the given package (physical id)."
-    ,   range       = (0, 4095)  &= typ "MIN,MAX"   &= help "Range of CPUs involved in binding."
-    ,   showCPU     = []      &= explicit           &= groupname "Display" &= name "cpu"  &= help "Display IRQs of the given CPUs set."
+    ,   bindIRQ     = def       &= explicit         &= name "bind" &= help "Set the IRQs affinity of the given device (e.g., --bind eth0 1 2)."
+    ,   exclude     = []        &= typ "INT"        &= groupname "Filters" &= help "Exclude CPUs from binding."
+    ,   package     = Nothing   &= typ "INT"        &= help "Apply then strategy to the given package (physical id)."
+    ,   range       = (0, 4095) &= typ "MIN,MAX"    &= help "Range of CPUs involved in binding."
+    ,   showCPU     = []        &= explicit         &= groupname "Display" &= name "cpu"  &= help "Display IRQs of the given CPUs set."
     ,   arguments   = []                            &= args
-    } &= summary "irq-affinity: a Linux interrupt affinity binding tool." &= program "irq-affinity"
+    } &= summary ("irq-affinity v" <> V.showVersion P.version <> " A Linux interrupt affinity binding tool.") &= program "irq-affinity"
 
 
 -- binding strategy

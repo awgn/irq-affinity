@@ -1,6 +1,6 @@
 cabal-version:          2.4
 name:                   irq-affinity
-version:                1.0
+version:                2.0
 license-file:           LICENSE
 author:                 Nicola Bonelli
 maintainer:             nicola@pfq.io
@@ -35,6 +35,7 @@ common common-options
 executable irq-affinity
   import:             common-options
   main-is:            irq-affinity.hs
+  other-modules:      Paths_irq_affinity
   build-depends:      base >= 4.7,
                       cmdargs,
                       mtl,
@@ -42,7 +43,7 @@ executable irq-affinity
                       ansi-terminal,
                       text,
                       regex-posix,
-                      extra
+                      extra,
   default-language:   Haskell2010
 
   if flag (StaticBuild) {
