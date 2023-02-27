@@ -114,6 +114,7 @@ data Options = Options
     ,   package     :: Maybe Int
     ,   range       :: (Int, Int)
     ,   showCPU     :: [Int]
+    ,   showName    :: [String]
     ,   arguments   :: [String]
     } deriving stock (Data, Typeable, Show)
 
@@ -136,6 +137,7 @@ options = cmdArgsMode $ Options
     ,   package     = Nothing   &= typ "INT"        &= help "Apply then strategy to the given package (physical id)."
     ,   range       = (0, 4095) &= typ "MIN,MAX"    &= help "Range of CPUs involved in binding."
     ,   showCPU     = []        &= explicit         &= groupname "Display" &= name "cpu"  &= help "Display IRQs of the given CPUs set."
+    ,   showName    = []        &= explicit         &= groupname "Display" &= name "name" &= help "Display IRQs by names."
     ,   arguments   = []                            &= args
     } &= summary ("irq-affinity v" <> V.showVersion P.version <> " A Linux interrupt affinity binding tool.") &= program "irq-affinity"
 
@@ -204,7 +206,8 @@ runCmd :: Options -> BindIO ()
 runCmd Options{..}
     | Just _  <- strategy   = forM_ arguments $ \dev -> applyStrategy dev
     | showAll               = liftIO $ showAllIRQs (T.pack <$> arguments)
-    | not $ null showCPU    = liftIO $ mapM_ (showIRQ (T.pack <$> arguments)) showCPU
+    | not $ null showCPU    = liftIO $ mapM_ (showIRQByCPU (T.pack <$> arguments)) showCPU
+    | not $ null showName   = liftIO $ mapM_ showIRQByName showName
     | not $ null bindIRQ    = runBinding bindIRQ (map read arguments)
     | not $ null arguments  = liftIO $ mapM_ showBinding arguments
     | otherwise             = liftIO $ withArgs ["--help"] $ void (cmdArgsRun options)
@@ -307,8 +310,8 @@ reverseMap irqs = do
 -- show IRQ list of a given cpu
 --
 
-showIRQ :: [T.Text] -> Int -> IO ()
-showIRQ filts cpu = do
+showIRQByCPU :: [T.Text] -> Int -> IO ()
+showIRQByCPU filts cpu = do
     let irqs = getInterrupts
 
     putStrLn $ "CPU " <> show cpu <> ":"
@@ -324,6 +327,22 @@ showIRQ filts cpu = do
         when (or xs || null filts) $ do
             let cntrs = getIRQCounters irq.number
             printf "  IRQ %s%d%s:%s%s%s →  %d\n" red irq.number reset green irq.description reset (cntrs !! cpu)
+
+-- show IRQ list of a given device 
+--
+
+showIRQByName :: String -> IO ()
+showIRQByName dev = do
+    let irq = getInterruptsByDevice dev
+
+    putStrLn $ "IRQ binding for device " <> dev <> ": "
+
+    when (null irq) $
+        error $ "irq-affinity: IRQ vector not found for dev " <> dev <> "!"
+
+    forM_ irq $ \(n, descr, count) -> do
+        printf "  irq %s%d%s:%s%s%s →  %d %s\n" red n reset green descr reset (sum count) (show count)
+
 
 -- utilities
 --
