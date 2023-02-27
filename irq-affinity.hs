@@ -343,6 +343,7 @@ showIRQByName dev = do
     forM_ irq $ \(n, descr, count) -> do
         printf "  irq %s%d%s:%s%s%s →  %d %s\n" red n reset green descr reset (sum count) (show count)
 
+    printf "  irq total: %d\n" (sum $ (\(_,_, count) -> sum count) <$> irq)
 
 -- utilities
 --
