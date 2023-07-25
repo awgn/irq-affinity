@@ -1,5 +1,5 @@
 cabal-version:          2.4
-name:                   irq-affinity
+name:                   affinity
 version:                2.0
 license-file:           LICENSE
 author:                 Nicola Bonelli
@@ -13,7 +13,7 @@ flag StaticBuild {
 }
 
 common common-options
-  build-depends:       base ^>= 4.16.0.0
+  build-depends:       base >= 4.16.0.0
 
   ghc-options:         -Wall
                        -Wcompat
@@ -32,18 +32,24 @@ common common-options
 
   default-language:    Haskell2010
 
-executable irq-affinity
+executable affinity
   import:             common-options
-  main-is:            irq-affinity.hs
-  other-modules:      Paths_irq_affinity
+  hs-source-dirs:     src
+  main-is:            Affinity.hs
+  other-modules:      Paths_affinity
+                      Proc
+                      Mask
+                      Utils
+                      Options
   build-depends:      base >= 4.7,
-                      cmdargs,
                       mtl,
                       split,
                       ansi-terminal,
                       text,
                       regex-posix,
                       extra,
+                      directory,
+                      optparse-applicative
   default-language:   Haskell2010
 
   if flag (StaticBuild) {
