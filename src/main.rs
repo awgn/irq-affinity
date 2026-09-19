@@ -480,6 +480,29 @@ fn show_irqs_by_cpu(
 }
 
 fn show_device_irq_counters(fs: &FsContext, dev: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // If `dev` parses as an IRQ number, show that single IRQ directly.
+    // This makes `--show-irq 40` work as users expect, instead of treating
+    // "40" as a network device name (which would yield "IRQ vector not found").
+    if let Ok(irq_num) = dev.trim().parse::<usize>() {
+        let topo = read_topology(fs)?;
+        let all = read_all_interrupts(fs, topo.num_processors())?;
+        if let Some(rec) = all.iter().find(|r| r.irq == irq_num) {
+            let sum: u64 = rec.counts.iter().sum();
+            let affinity = read_irq_affinity(fs, rec.irq)
+                .map(|m| format!(" (affinity: cpu {:?}, mask {})", m.to_cpus(), m.to_hex_string()))
+                .unwrap_or_default();
+            println!("IRQ {}:{} \u{2192} {}{} {:?}",
+                rec.irq.to_string().bold().red(),
+                rec.description.green(),
+                sum,
+                affinity,
+                rec.counts
+            );
+            return Ok(());
+        }
+        return Err(format!("IRQ {irq_num} not found in /proc/interrupts!").into());
+    }
+
     let topo = read_topology(fs)?;
     let irqs = find_device_irqs(fs, dev, topo.num_processors())?;
 
