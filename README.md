@@ -31,7 +31,6 @@ A fast, reliable Linux IRQ and XPS network queue affinity tuning tool and Rust l
 ## Installation & Build
 
 ```bash
-cd rust
 cargo build --release
 ```
 
@@ -124,18 +123,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-```
-
----
-
-## Moving into an Independent Repository
-
-Because the Rust codebase is self-contained in `rust/`, you can extract it into its own repository at any time:
-
-```bash
-cp -r /path/to/irq-affinity/rust /path/to/new-repo
-cd /path/to/new-repo
-git init
-git add .
-git commit -m "Initial commit: irq-affinity in Rust"
 ```
