@@ -1,8 +1,8 @@
 [package]
 name = "irq-affinity"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
-authors = ["Nicola Bonelli <nicola@pfq.io>"]
+authors = ["Nicola Bonelli <nicola.bonelli@gmail.com>"]
 description = "A Linux interrupt and XPS affinity binding tool and library"
 license = "GPL-2.0-or-later"
 
