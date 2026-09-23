@@ -53,9 +53,6 @@ cargo build --release --target x86_64-unknown-linux-musl
 # Show current IRQ bindings for eth0
 irq-affinity eth0
 
-# Show inverted mapping (CPU -> IRQs)
-irq-affinity --show-all
-
 # Show IRQ activity for CPU 2
 irq-affinity --show-cpu 2
 

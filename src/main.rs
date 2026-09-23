@@ -55,10 +55,6 @@ struct Cli {
     #[arg(short = 'd', long = "dryrun")]
     dry_run: bool,
 
-    /// Display IRQ mappings for all CPUs available
-    #[arg(long = "show-all", alias = "show")]
-    show_all: bool,
-
     /// Display IRQs and counters handled by the given CPU
     #[arg(long = "show-cpu", value_name = "CPU")]
     show_cpu: Option<usize>,
@@ -176,19 +172,13 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 3. Handle --show-all
-    if cli.show_all {
-        show_all_irqs(fs, &cli.devices)?;
-        return Ok(());
-    }
-
-    // 4. Handle --show-cpu <CPU>
+    // 3. Handle --show-cpu <CPU>
     if let Some(cpu) = cli.show_cpu {
         show_irqs_by_cpu(fs, cpu, &cli.devices)?;
         return Ok(());
     }
 
-    // 5. Handle --show-irq
+    // 4. Handle --show-irq
     if cli.show_irq {
         if cli.devices.is_empty() {
             return Err("please specify device(s) to inspect IRQ counters".into());
@@ -199,7 +189,7 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 6. Handle --show-xps
+    // 5. Handle --show-xps
     if cli.show_xps {
         if cli.devices.is_empty() {
             return Err("please specify device(s) to inspect XPS mappings".into());
@@ -210,7 +200,7 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 7. Handle --irq-strategy
+    // 6. Handle --irq-strategy
     if let Some(ref strat_str) = cli.irq_strategy {
         if cli.devices.is_empty() {
             return Err("please specify device(s) to apply IRQ strategy to".into());
@@ -224,7 +214,7 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 8. Handle --xps-strategy
+    // 7. Handle --xps-strategy
     if let Some(ref strat_str) = cli.xps_strategy {
         if cli.devices.is_empty() {
             return Err("please specify device(s) to apply XPS strategy to".into());
@@ -238,7 +228,7 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 9. Default: show current binding for specified devices
+    // 8. Default: show current binding for specified devices
     if !cli.devices.is_empty() {
         for dev in &cli.devices {
             show_device_current_binding(fs, dev)?;
@@ -401,44 +391,6 @@ fn show_device_current_binding(fs: &FsContext, dev: &str) -> Result<(), Affinity
             descr.green(),
             cpus
         );
-    }
-
-    Ok(())
-}
-
-fn show_all_irqs(fs: &FsContext, filters: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let topo = read_topology(fs)?;
-    let all = read_all_interrupts(fs, topo.num_processors())?;
-
-    // Invert mapping: CPU -> list of IRQs
-    let mut cpu_to_irqs: std::collections::BTreeMap<usize, Vec<(usize, String)>> =
-        std::collections::BTreeMap::new();
-
-    for rec in all {
-        if !filters.is_empty()
-            && !filters
-                .iter()
-                .any(|f| rec.description.to_lowercase().contains(&f.to_lowercase()))
-        {
-            continue;
-        }
-
-        if let Ok(mask) = read_irq_affinity(fs, rec.irq) {
-            for cpu in mask.to_cpus() {
-                cpu_to_irqs
-                    .entry(cpu)
-                    .or_default()
-                    .push((rec.irq, rec.description.clone()));
-            }
-        }
-    }
-
-    for (cpu, irqs) in cpu_to_irqs {
-        print!("  cpu {} \u{2192} ", cpu.to_string().bold().cyan());
-        for (irq, descr) in irqs {
-            print!("{}:{} ", irq.to_string().bold().red(), descr.green());
-        }
-        println!();
     }
 
     Ok(())
