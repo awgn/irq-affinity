@@ -200,3 +200,44 @@ fn test_save_and_load_configuration() {
     // Verify IRQ 40 was restored to initial mask [0]
     assert_eq!(read_irq_affinity(&fs, 40).unwrap().to_cpus(), vec![0]);
 }
+
+#[test]
+fn test_plan_and_apply_mellanox_pci_bus() {
+    let (temp, fs) = setup_mock_environment();
+    let root = temp.path();
+
+    // Setup Mellanox IRQs (665, 666)
+    fs::create_dir_all(root.join("proc/irq/665")).unwrap();
+    fs::create_dir_all(root.join("proc/irq/666")).unwrap();
+    fs::write(root.join("proc/irq/665/smp_affinity"), "00000001\n").unwrap();
+    fs::write(root.join("proc/irq/666/smp_affinity"), "00000001\n").unwrap();
+
+    // Device ens1f0np0 with sysfs symlink to 0000:cc:00.1
+    let net_dev = root.join("sys/class/net/ens1f0np0");
+    fs::create_dir_all(&net_dev).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("../../../0000:cc:00.1", net_dev.join("device")).unwrap();
+    }
+
+    // Append Mellanox interrupts lines to /proc/interrupts
+    let mut interrupts = fs::read_to_string(fs.proc_interrupts_path()).unwrap();
+    interrupts.push_str(
+        " 665:        100          0          0          0  IR-PCI-MSIX-0000:cc:00.1   62-edge      mlx5_comp61@pci:0000:cc:00.1\n\
+         666:          0        200          0          0  IR-PCI-MSIX-0000:cc:00.1   63-edge      mlx5_comp62@pci:0000:cc:00.1\n",
+    );
+    fs::write(fs.proc_interrupts_path(), interrupts).unwrap();
+
+    let filter = CpuFilter::default();
+    let plan = plan_irq_binding(&fs, "ens1f0np0", &Strategy::RoundRobin, &filter).unwrap();
+
+    assert_eq!(plan.device, "ens1f0np0");
+    assert_eq!(plan.assignments.len(), 2);
+    assert_eq!(plan.assignments[0].new_mask.to_cpus(), vec![0]);
+    assert_eq!(plan.assignments[1].new_mask.to_cpus(), vec![1]);
+
+    apply_plan(&plan, &fs, false).unwrap();
+
+    assert_eq!(read_irq_affinity(&fs, 665).unwrap().to_cpus(), vec![0]);
+    assert_eq!(read_irq_affinity(&fs, 666).unwrap().to_cpus(), vec![1]);
+}

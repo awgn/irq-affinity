@@ -101,6 +101,10 @@ impl FsContext {
         self.root.join(format!("sys/class/net/{dev}/queues"))
     }
 
+    pub fn sys_net_device_path(&self, dev: &str) -> PathBuf {
+        self.root.join(format!("sys/class/net/{dev}/device"))
+    }
+
     pub fn sys_net_xps_path(&self, dev: &str, queue: usize, flavor: XpsFlavor) -> PathBuf {
         self.root.join(format!(
             "sys/class/net/{dev}/queues/tx-{queue}/xps_{flavor}s"
@@ -183,23 +187,111 @@ pub fn read_all_interrupts(
     Ok(records)
 }
 
+/// Discovers the bus identifier for a network device (e.g. PCI slot name like "0000:cc:00.1").
+///
+/// Inspects `/sys/class/net/<dev>/device` symlink target as well as `uevent` files.
+pub fn get_device_bus(fs: &FsContext, dev: &str) -> Option<String> {
+    let device_path = fs.sys_net_device_path(dev);
+
+    // 1. Try reading the symlink target of /sys/class/net/<dev>/device
+    if let Ok(target) = fs::read_link(&device_path) {
+        if let Some(file_name) = target
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        {
+            return Some(file_name.to_string());
+        }
+    }
+
+    // 2. Try reading /sys/class/net/<dev>/device/uevent for PCI_SLOT_NAME=...
+    let uevent_path = device_path.join("uevent");
+    if let Ok(content) = fs::read_to_string(&uevent_path) {
+        for line in content.lines() {
+            if let Some(slot) = line.strip_prefix("PCI_SLOT_NAME=") {
+                let slot = slot.trim();
+                if !slot.is_empty() {
+                    return Some(slot.to_string());
+                }
+            }
+        }
+    }
+
+    // 3. Try reading /sys/class/net/<dev>/uevent as fallback
+    let net_uevent = fs.root().join(format!("sys/class/net/{dev}/uevent"));
+    if let Ok(content) = fs::read_to_string(&net_uevent) {
+        for line in content.lines() {
+            if let Some(slot) = line.strip_prefix("PCI_SLOT_NAME=") {
+                let slot = slot.trim();
+                if !slot.is_empty() {
+                    return Some(slot.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Filters interrupt records by a device name or bus pattern.
+fn filter_interrupts(records: &[IrqRecord], pattern: &str) -> Result<Vec<IrqRecord>, ProcfsError> {
+    let dev_regex = regex::Regex::new(&format!(
+        r"(?i)\b{}\b|{}-",
+        regex::escape(pattern),
+        regex::escape(pattern)
+    ))
+    .map_err(|e| ProcfsError::InvalidInterruptLine(format!("regex error: {e}")))?;
+
+    let pattern_lower = pattern.to_lowercase();
+    let matches: Vec<IrqRecord> = records
+        .iter()
+        .filter(|rec| {
+            dev_regex.is_match(&rec.description)
+                || rec.description.to_lowercase().contains(&pattern_lower)
+        })
+        .cloned()
+        .collect();
+
+    Ok(matches)
+}
+
 /// Finds IRQs related to a specific network device.
-/// Uses exact word matching, prefix matching (e.g. eth0-TxRx-0), or substring matching.
+///
+/// First attempts to match by the network interface name (e.g. "eth0").
+/// If no matching IRQs are found (which is common for vendors like Mellanox where
+/// `/proc/interrupts` lists bus identifiers such as `mlx5_comp61@pci:0000:cc:00.1`),
+/// it attempts to discover the device's bus identifier from sysfs and repeats the
+/// matching procedure using the bus address.
 pub fn find_device_irqs(
     fs: &FsContext,
     dev: &str,
     num_cpus: usize,
 ) -> Result<Vec<IrqRecord>, ProcfsError> {
     let all = read_all_interrupts(fs, num_cpus)?;
-    let dev_regex = regex::Regex::new(&format!(r"(?i)\b{}\b|{}-", regex::escape(dev), regex::escape(dev)))
-        .map_err(|e| ProcfsError::InvalidInterruptLine(format!("regex error: {e}")))?;
 
-    let matches: Vec<IrqRecord> = all
-        .into_iter()
-        .filter(|rec| dev_regex.is_match(&rec.description) || rec.description.contains(dev))
-        .collect();
+    // 1. Try matching with the device name directly (e.g. "eth0")
+    let matches = filter_interrupts(&all, dev)?;
+    if !matches.is_empty() {
+        return Ok(matches);
+    }
 
-    Ok(matches)
+    // 2. If no matches found, attempt to find the hardware bus (e.g. PCI slot name) and match on that
+    if let Some(bus) = get_device_bus(fs, dev) {
+        let bus_matches = filter_interrupts(&all, &bus)?;
+        if !bus_matches.is_empty() {
+            return Ok(bus_matches);
+        }
+
+        // Also try without PCI domain prefix if applicable (e.g. "0000:cc:00.1" -> "cc:00.1")
+        if let Some(short_bus) = bus.strip_prefix("0000:") {
+            let short_matches = filter_interrupts(&all, short_bus)?;
+            if !short_matches.is_empty() {
+                return Ok(short_matches);
+            }
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 /// Reads the current smp_affinity of an IRQ
@@ -309,4 +401,97 @@ pub fn write_xps_affinity(
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_find_device_irqs_direct_match() {
+        let temp = TempDir::new().unwrap();
+        let fs = FsContext::with_root(temp.path());
+
+        let proc_dir = temp.path().join("proc");
+        fs::create_dir_all(&proc_dir).unwrap();
+
+        let interrupts_content = r#"
+            CPU0       CPU1
+  40:        100          0   PCI-MSI-edge      eth0-TxRx-0
+  41:          0        200   PCI-MSI-edge      eth0-TxRx-1
+  50:          5          0   IO-APIC-edge      timer
+"#;
+        fs::write(fs.proc_interrupts_path(), interrupts_content).unwrap();
+
+        let irqs = find_device_irqs(&fs, "eth0", 2).unwrap();
+        assert_eq!(irqs.len(), 2);
+        assert_eq!(irqs[0].irq, 40);
+        assert_eq!(irqs[1].irq, 41);
+    }
+
+    #[test]
+    fn test_find_device_irqs_via_pci_bus_symlink() {
+        let temp = TempDir::new().unwrap();
+        let fs = FsContext::with_root(temp.path());
+
+        let proc_dir = temp.path().join("proc");
+        fs::create_dir_all(&proc_dir).unwrap();
+
+        // Mellanox style line with bus in controller and description, but not interface name
+        let interrupts_content = r#"
+            CPU0       CPU1
+ 665:     219828          2   IR-PCI-MSIX-0000:cc:00.1   62-edge      mlx5_comp61@pci:0000:cc:00.1
+ 666:       1234          0   IR-PCI-MSIX-0000:cc:00.1   63-edge      mlx5_comp62@pci:0000:cc:00.1
+"#;
+        fs::write(fs.proc_interrupts_path(), interrupts_content).unwrap();
+
+        // Create sys/class/net/ens1f0np0/device symlink pointing to ../../../0000:cc:00.1
+        let net_dir = temp.path().join("sys/class/net/ens1f0np0");
+        fs::create_dir_all(&net_dir).unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("../../../0000:cc:00.1", net_dir.join("device")).unwrap();
+        }
+
+        let bus = get_device_bus(&fs, "ens1f0np0");
+        assert_eq!(bus.as_deref(), Some("0000:cc:00.1"));
+
+        let irqs = find_device_irqs(&fs, "ens1f0np0", 2).unwrap();
+        assert_eq!(irqs.len(), 2);
+        assert_eq!(irqs[0].irq, 665);
+        assert_eq!(irqs[1].irq, 666);
+    }
+
+    #[test]
+    fn test_find_device_irqs_via_pci_bus_uevent() {
+        let temp = TempDir::new().unwrap();
+        let fs = FsContext::with_root(temp.path());
+
+        let proc_dir = temp.path().join("proc");
+        fs::create_dir_all(&proc_dir).unwrap();
+
+        let interrupts_content = r#"
+            CPU0       CPU1
+ 665:     219828          2   IR-PCI-MSIX-0000:cc:00.1   62-edge      mlx5_comp61@pci:0000:cc:00.1
+"#;
+        fs::write(fs.proc_interrupts_path(), interrupts_content).unwrap();
+
+        // Create sys/class/net/ens1f0np0/device/uevent with PCI_SLOT_NAME
+        let device_dir = temp.path().join("sys/class/net/ens1f0np0/device");
+        fs::create_dir_all(&device_dir).unwrap();
+        fs::write(
+            device_dir.join("uevent"),
+            "DRIVER=mlx5_core\nPCI_SLOT_NAME=0000:cc:00.1\n",
+        )
+        .unwrap();
+
+        let bus = get_device_bus(&fs, "ens1f0np0");
+        assert_eq!(bus.as_deref(), Some("0000:cc:00.1"));
+
+        let irqs = find_device_irqs(&fs, "ens1f0np0", 2).unwrap();
+        assert_eq!(irqs.len(), 1);
+        assert_eq!(irqs[0].irq, 665);
+    }
 }

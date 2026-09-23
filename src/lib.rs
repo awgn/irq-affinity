@@ -9,9 +9,9 @@ pub use config::{AffinitySnapshot, IrqConfig, NicConfig, XpsQueueConfig};
 pub use mask::{CpuMask, ParseMaskError};
 pub use plan::{BindingAssignment, BindingPlan, TargetKind};
 pub use procfs::{
-    find_device_irqs, get_nic_queues, read_all_interrupts, read_irq_affinity, read_topology,
-    read_xps_affinity, write_irq_affinity, write_xps_affinity, FsContext, IrqRecord, NicQueues,
-    ProcfsError, XpsFlavor,
+    find_device_irqs, get_device_bus, get_nic_queues, read_all_interrupts, read_irq_affinity,
+    read_topology, read_xps_affinity, write_irq_affinity, write_xps_affinity, FsContext,
+    IrqRecord, NicQueues, ProcfsError, XpsFlavor,
 };
 pub use strategy::{generate_masks, CpuFilter, Strategy, StrategyError};
 pub use topology::{CpuInfo, Topology, TopologyError};
