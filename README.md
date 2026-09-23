@@ -15,7 +15,7 @@ A fast, reliable Linux IRQ and XPS network queue affinity tuning tool and Rust l
   - `manual`: allows explicit mask or CPU assignments.
 - **Topology-aware**:
   - Filter by NUMA socket / physical package (`--package <ID>`).
-  - Restrict to CPU ranges or lists (`--cpus 0-3,8-11` or `--range 0,15`).
+  - Restrict to CPU ranges or lists (`--cpus 0-3,8-11`).
   - Offset starting CPU (`--first-cpu <ID>`).
   - Exclude isolated CPUs (`--exclude 0,1`).
 - **State Snapshots (`--save` and `--load`)**:

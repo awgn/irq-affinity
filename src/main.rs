@@ -39,10 +39,6 @@ struct Cli {
     #[arg(long = "first-cpu", value_name = "INT")]
     first_cpu: Option<usize>,
 
-    /// Range of CPUs involved in binding (MIN,MAX)
-    #[arg(long = "range", value_name = "MIN,MAX", value_parser = parse_range)]
-    range: Option<(usize, usize)>,
-
     /// Exclude specific CPUs from binding (can be repeated or comma-separated)
     #[arg(short = 'e', long = "exclude", value_name = "INT", value_delimiter = ',')]
     exclude: Vec<usize>,
@@ -52,7 +48,7 @@ struct Cli {
     package: Option<usize>,
 
     /// Dry run, don't actually write to /proc or /sys
-    #[arg(short = 'd', long = "dryrun")]
+    #[arg(short = 'd', long = "dry-run", alias = "dryrun")]
     dry_run: bool,
 
     /// Display IRQs and counters handled by the given CPU
@@ -84,23 +80,6 @@ struct Cli {
     devices: Vec<String>,
 }
 
-fn parse_range(s: &str) -> Result<(usize, usize), String> {
-    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
-    if parts.len() != 2 {
-        return Err("range must be in MIN,MAX format (e.g. 0,15)".to_string());
-    }
-    let min: usize = parts[0]
-        .parse()
-        .map_err(|e| format!("invalid min range: {e}"))?;
-    let max: usize = parts[1]
-        .parse()
-        .map_err(|e| format!("invalid max range: {e}"))?;
-    if min > max {
-        return Err(format!("range min ({min}) cannot be greater than max ({max})"));
-    }
-    Ok((min, max))
-}
-
 fn build_cpu_filter(cli: &Cli) -> Result<CpuFilter, String> {
     let allowed_cpus = if let Some(ref cpus_str) = cli.cpus {
         let mask = CpuMask::parse_cpu_list(cpus_str)
@@ -113,7 +92,7 @@ fn build_cpu_filter(cli: &Cli) -> Result<CpuFilter, String> {
     Ok(CpuFilter {
         allowed_cpus,
         first_cpu: cli.first_cpu,
-        range: cli.range,
+        range: None,
         exclude: cli.exclude.clone(),
         package: cli.package,
     })
@@ -200,6 +179,8 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let mut applied_strategy = false;
+
     // 6. Handle --irq-strategy
     if let Some(ref strat_str) = cli.irq_strategy {
         if cli.devices.is_empty() {
@@ -211,7 +192,7 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         for dev in &cli.devices {
             apply_irq_strategy_to_nic(fs, dev, &strategy, &filter, cli.dry_run, cli.verbose)?;
         }
-        return Ok(());
+        applied_strategy = true;
     }
 
     // 7. Handle --xps-strategy
@@ -225,6 +206,10 @@ fn run(cli: &Cli, fs: &FsContext) -> Result<(), Box<dyn std::error::Error>> {
         for dev in &cli.devices {
             apply_xps_strategy_to_nic(fs, dev, &strategy, &filter, flavor, cli.dry_run, cli.verbose)?;
         }
+        applied_strategy = true;
+    }
+
+    if applied_strategy {
         return Ok(());
     }
 
