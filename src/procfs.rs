@@ -187,6 +187,15 @@ pub fn read_all_interrupts(
     Ok(records)
 }
 
+fn path_leaf_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .or_else(|| path.components().last().map(|c| c.as_os_str()))
+        .and_then(|s| s.to_str())
+        .map(|s| s.trim_matches('/'))
+        .filter(|s| !s.is_empty() && *s != "." && *s != ".." && *s != "device")
+        .map(|s| s.to_string())
+}
+
 /// Discovers the bus identifier for a network device (e.g. PCI slot name like "0000:cc:00.1").
 ///
 /// Inspects `/sys/class/net/<dev>/device` symlink target as well as `uevent` files.
@@ -195,12 +204,8 @@ pub fn get_device_bus(fs: &FsContext, dev: &str) -> Option<String> {
 
     // 1. Try reading the symlink target of /sys/class/net/<dev>/device
     if let Ok(target) = fs::read_link(&device_path) {
-        if let Some(file_name) = target
-            .file_name()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
-        {
-            return Some(file_name.to_string());
+        if let Some(file_name) = path_leaf_name(&target) {
+            return Some(file_name);
         }
     }
 
@@ -217,7 +222,14 @@ pub fn get_device_bus(fs: &FsContext, dev: &str) -> Option<String> {
         }
     }
 
-    // 3. Try reading /sys/class/net/<dev>/uevent as fallback
+    // 3. Try canonicalize on device_path (resolves symlinks completely on real Linux systems)
+    if let Ok(canon) = device_path.canonicalize() {
+        if let Some(file_name) = path_leaf_name(&canon) {
+            return Some(file_name);
+        }
+    }
+
+    // 4. Try reading /sys/class/net/<dev>/uevent as fallback
     let net_uevent = fs.root().join(format!("sys/class/net/{dev}/uevent"));
     if let Ok(content) = fs::read_to_string(&net_uevent) {
         for line in content.lines() {
